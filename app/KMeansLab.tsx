@@ -198,7 +198,7 @@ function makePoints(dataset: DatasetId, requestedCount: number, seed: number): P
   const count = requestedCount;
 
   if (dataset === "showcase") {
-    const centers: Vec3[] = [[0, 10, 0], [0, -9, 0], [-13, 1, -11], [13, 1, -11], [0, 1, 14]];
+    const centers: Vec3[] = [[0, 11, 0], [0, -11, 0], [-13, -4, -11], [13, 5, -11], [0, -5, 14]];
     for (let id = 0; id < count; id += 1) {
       const center = centers[id % centers.length];
       points.push({
@@ -868,11 +868,11 @@ function Scene({ model, runId, hovered, selected, focusedCluster, showLinks, sho
           </div>
         </Html>
       )}
-      <gridHelper args={[58, 29, "#43515f", "#24313d"]} position={[0, -11.5, 0]} />
-      <axesHelper args={[16]} position={[0, -11.45, 0]} />
-      <Html position={[16.6, -11.35, 0]}><span className="axis-label">X</span></Html>
-      <Html position={[0, 5.3, 0]}><span className="axis-label">Y</span></Html>
-      <Html position={[0, -11.35, 16.6]}><span className="axis-label">Z</span></Html>
+      <gridHelper args={[58, 29, "#43515f", "#24313d"]} position={[0, 0, 0]} />
+      <axesHelper args={[16]} position={[0, 0.05, 0]} />
+      <Html position={[16.6, 0.15, 0]}><span className="axis-label">X</span></Html>
+      <Html position={[0, 16.6, 0]}><span className="axis-label">Y</span></Html>
+      <Html position={[0, 0.15, 16.6]}><span className="axis-label">Z</span></Html>
       <OrbitControls
         makeDefault
         enableDamping
