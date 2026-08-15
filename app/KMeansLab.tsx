@@ -36,7 +36,7 @@ type Model = {
 };
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
-const NEUTRAL_COLOR = "#b7c7d6";
+const NEUTRAL_COLOR = "#8fdcff";
 const CLASSIC_POINTS: Vec3[] = [
   [-7.2, 4.8, -1.6], [-7.2, -1.2, 1.2], [7.2, -2.4, -1.1], [0, 3.6, 2.4],
   [4.8, -1.2, 1.6], [2.4, -2.4, -2.2], [-9.6, -6, 0.4], [-2.4, 4.8, -1.2],
@@ -111,6 +111,20 @@ function distanceSquared(a: Vec3, b: Vec3) {
   const dy = a[1] - b[1];
   const dz = a[2] - b[2];
   return dx * dx + dy * dy + dz * dz;
+}
+
+function displayedCluster(point: PointDatum, centroids: Vec3[]) {
+  if (point.cluster >= 0) return point.cluster;
+  if (!centroids.length) return -1;
+
+  return centroids.reduce((closest, centroid, index) => (
+    distanceSquared(point.position, centroid) < distanceSquared(point.position, centroids[closest]) ? index : closest
+  ), 0);
+}
+
+function displayedPointColor(point: PointDatum, centroids: Vec3[]) {
+  const cluster = displayedCluster(point, centroids);
+  return cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[cluster];
 }
 
 function makePoints(dataset: DatasetId, requestedCount: number, seed: number): PointDatum[] {
@@ -356,8 +370,9 @@ function advanceModel(model: Model): Model {
   };
 }
 
-function PointCloud({ points, hovered, onHover, onPlace }: {
+function PointCloud({ points, centroids, hovered, onHover, onPlace }: {
   points: PointDatum[];
+  centroids: Vec3[];
   hovered: number | null;
   onHover: (id: number | null) => void;
   onPlace?: (position: Vec3) => void;
@@ -366,10 +381,20 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const targetColor = useMemo(() => new THREE.Color(), []);
   const coreGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.3, 1), []);
+  const glowGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.38, 1), []);
   const coreMaterial = useMemo(() => new THREE.MeshBasicMaterial({
     color: "#ffffff",
     vertexColors: true,
     toneMapped: false,
+  }), []);
+  const glowMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: "#ffffff",
+    vertexColors: true,
+    toneMapped: false,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
   }), []);
 
   const coreMesh = useMemo(() => {
@@ -379,23 +404,37 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
       dummy.scale.setScalar(point.cluster < 0 ? 0.9 : 1.05);
       dummy.updateMatrix();
       mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, new THREE.Color(point.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[point.cluster]));
+      mesh.setColorAt(index, new THREE.Color(displayedPointColor(point, centroids)));
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     return mesh;
-  }, [coreGeometry, coreMaterial, dummy, points.length]);
+  }, [centroids, coreGeometry, coreMaterial, dummy, points.length]);
+
+  const glowMesh = useMemo(() => {
+    const mesh = new THREE.InstancedMesh(glowGeometry, glowMaterial, points.length);
+    points.forEach((point, index) => {
+      dummy.position.set(...point.position);
+      dummy.scale.setScalar(point.cluster < 0 ? 0.9 : 1.05);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+      mesh.setColorAt(index, new THREE.Color(displayedPointColor(point, centroids)));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    return mesh;
+  }, [centroids, dummy, glowGeometry, glowMaterial, points.length]);
 
   useEffect(() => {
-    currentColors.current = points.map((point) => new THREE.Color(
-      point.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[point.cluster],
-    ));
-  }, [points]);
+    currentColors.current = points.map((point) => new THREE.Color(displayedPointColor(point, centroids)));
+  }, [centroids, points]);
 
   useEffect(() => () => {
     coreGeometry.dispose();
+    glowGeometry.dispose();
     coreMaterial.dispose();
-  }, [coreGeometry, coreMaterial]);
+    glowMaterial.dispose();
+  }, [coreGeometry, coreMaterial, glowGeometry, glowMaterial]);
 
   useFrame((_, delta) => {
     const damping = 1 - Math.exp(-delta * 7);
@@ -406,13 +445,17 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
       dummy.scale.setScalar(scale);
       dummy.updateMatrix();
       coreMesh.setMatrixAt(index, dummy.matrix);
-      targetColor.set(isHovered ? "#ffffff" : point.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[point.cluster]);
+      glowMesh.setMatrixAt(index, dummy.matrix);
+      targetColor.set(displayedPointColor(point, centroids));
       if (!currentColors.current[index]) currentColors.current[index] = targetColor.clone();
       currentColors.current[index].lerp(targetColor, damping);
       coreMesh.setColorAt(index, currentColors.current[index]);
+      glowMesh.setColorAt(index, currentColors.current[index]);
     });
     coreMesh.instanceMatrix.needsUpdate = true;
+    glowMesh.instanceMatrix.needsUpdate = true;
     if (coreMesh.instanceColor) coreMesh.instanceColor.needsUpdate = true;
+    if (glowMesh.instanceColor) glowMesh.instanceColor.needsUpdate = true;
   });
 
   const handlePointer = (event: ThreeEvent<PointerEvent>) => {
@@ -428,12 +471,15 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
   };
 
   return (
-    <primitive
-      object={coreMesh}
-      onPointerMove={handlePointer}
-      onPointerOut={() => onHover(null)}
-      onClick={handlePlace}
-    />
+    <>
+      <primitive object={glowMesh} raycast={() => null} />
+      <primitive
+        object={coreMesh}
+        onPointerMove={handlePointer}
+        onPointerOut={() => onHover(null)}
+        onClick={handlePlace}
+      />
+    </>
   );
 }
 
@@ -646,7 +692,7 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <ambientLight intensity={1.35} color="#c7d4df" />
       <directionalLight position={[12, 18, 9]} intensity={2.35} color="#ffffff" />
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
-      <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
+      <PointCloud points={model.points} centroids={model.centroids} hovered={hovered} onHover={onHover} onPlace={onPlace} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
       {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
         <ClusterShell
