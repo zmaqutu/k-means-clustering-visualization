@@ -122,11 +122,6 @@ function displayedCluster(point: PointDatum, centroids: Vec3[]) {
   ), 0);
 }
 
-function displayedPointColor(point: PointDatum, centroids: Vec3[]) {
-  const cluster = displayedCluster(point, centroids);
-  return cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[cluster];
-}
-
 function makePoints(dataset: DatasetId, requestedCount: number, seed: number): PointDatum[] {
   if (dataset === "classic") {
     return CLASSIC_POINTS.map((position, id) => ({ id, position, cluster: -1 }));
@@ -377,108 +372,75 @@ function PointCloud({ points, centroids, hovered, onHover, onPlace }: {
   onHover: (id: number | null) => void;
   onPlace?: (position: Vec3) => void;
 }) {
-  const currentColors = useRef<THREE.Color[]>([]);
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const targetColor = useMemo(() => new THREE.Color(), []);
   const coreGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.3, 1), []);
-  const glowGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.38, 1), []);
-  const coreMaterial = useMemo(() => new THREE.MeshBasicMaterial({
-    color: "#ffffff",
-    vertexColors: true,
+  const materials = useMemo(() => [NEUTRAL_COLOR, ...CLUSTER_COLORS].map((color) => new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.82,
+    roughness: 0.32,
+    metalness: 0.08,
     toneMapped: false,
-  }), []);
-  const glowMaterial = useMemo(() => new THREE.MeshBasicMaterial({
-    color: "#ffffff",
-    vertexColors: true,
-    toneMapped: false,
-    transparent: true,
-    opacity: 0.3,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  }), []);
+  })), []);
 
-  const coreMesh = useMemo(() => {
-    const mesh = new THREE.InstancedMesh(coreGeometry, coreMaterial, points.length);
-    points.forEach((point, index) => {
-      dummy.position.set(...point.position);
-      dummy.scale.setScalar(point.cluster < 0 ? 0.9 : 1.05);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, new THREE.Color(displayedPointColor(point, centroids)));
+  const batches = useMemo(() => {
+    const groups = Array.from({ length: materials.length }, () => [] as PointDatum[]);
+    points.forEach((point) => {
+      const cluster = displayedCluster(point, centroids);
+      groups[cluster + 1].push(point);
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    return mesh;
-  }, [centroids, coreGeometry, coreMaterial, dummy, points.length]);
 
-  const glowMesh = useMemo(() => {
-    const mesh = new THREE.InstancedMesh(glowGeometry, glowMaterial, points.length);
-    points.forEach((point, index) => {
-      dummy.position.set(...point.position);
-      dummy.scale.setScalar(point.cluster < 0 ? 0.9 : 1.05);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, new THREE.Color(displayedPointColor(point, centroids)));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    return mesh;
-  }, [centroids, dummy, glowGeometry, glowMaterial, points.length]);
+    return groups.map((group, paletteIndex) => {
+      const mesh = new THREE.InstancedMesh(coreGeometry, materials[paletteIndex], group.length);
+      mesh.userData.pointIds = group.map((point) => point.id);
+      return { mesh, points: group };
+    }).filter((batch) => batch.points.length > 0);
+  }, [centroids, coreGeometry, materials, points]);
 
   useEffect(() => {
-    currentColors.current = points.map((point) => new THREE.Color(displayedPointColor(point, centroids)));
-  }, [centroids, points]);
+    batches.forEach(({ mesh, points: batchPoints }) => {
+      batchPoints.forEach((point, index) => {
+        dummy.position.set(...point.position);
+        dummy.scale.setScalar(point.id === hovered ? 1.55 : point.cluster < 0 ? 0.94 : 1.06);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+    });
+  }, [batches, dummy, hovered]);
 
   useEffect(() => () => {
     coreGeometry.dispose();
-    glowGeometry.dispose();
-    coreMaterial.dispose();
-    glowMaterial.dispose();
-  }, [coreGeometry, coreMaterial, glowGeometry, glowMaterial]);
-
-  useFrame((_, delta) => {
-    const damping = 1 - Math.exp(-delta * 7);
-    points.forEach((point, index) => {
-      const isHovered = point.id === hovered;
-      dummy.position.set(...point.position);
-      const scale = isHovered ? 1.65 : point.cluster < 0 ? 0.9 : 1.05;
-      dummy.scale.setScalar(scale);
-      dummy.updateMatrix();
-      coreMesh.setMatrixAt(index, dummy.matrix);
-      glowMesh.setMatrixAt(index, dummy.matrix);
-      targetColor.set(displayedPointColor(point, centroids));
-      if (!currentColors.current[index]) currentColors.current[index] = targetColor.clone();
-      currentColors.current[index].lerp(targetColor, damping);
-      coreMesh.setColorAt(index, currentColors.current[index]);
-      glowMesh.setColorAt(index, currentColors.current[index]);
-    });
-    coreMesh.instanceMatrix.needsUpdate = true;
-    glowMesh.instanceMatrix.needsUpdate = true;
-    if (coreMesh.instanceColor) coreMesh.instanceColor.needsUpdate = true;
-    if (glowMesh.instanceColor) glowMesh.instanceColor.needsUpdate = true;
-  });
+    materials.forEach((material) => material.dispose());
+  }, [coreGeometry, materials]);
 
   const handlePointer = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
-    if (Number.isInteger(event.instanceId)) onHover(points[event.instanceId as number]?.id ?? null);
+    const pointId = Number.isInteger(event.instanceId)
+      ? event.object.userData.pointIds?.[event.instanceId as number]
+      : null;
+    onHover(pointId ?? null);
   };
 
   const handlePlace = (event: ThreeEvent<MouseEvent>) => {
     if (!onPlace || !Number.isInteger(event.instanceId)) return;
     event.stopPropagation();
-    const point = points[event.instanceId as number];
+    const pointId = event.object.userData.pointIds?.[event.instanceId as number];
+    const point = points.find((candidate) => candidate.id === pointId);
     if (point) onPlace(point.position);
   };
 
   return (
     <>
-      <primitive object={glowMesh} raycast={() => null} />
-      <primitive
-        object={coreMesh}
-        onPointerMove={handlePointer}
-        onPointerOut={() => onHover(null)}
-        onClick={handlePlace}
-      />
+      {batches.map(({ mesh }) => (
+        <primitive
+          key={mesh.uuid}
+          object={mesh}
+          onPointerMove={handlePointer}
+          onPointerOut={() => onHover(null)}
+          onClick={handlePlace}
+        />
+      ))}
     </>
   );
 }
