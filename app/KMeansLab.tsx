@@ -368,13 +368,15 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
   const glowGeometry = useMemo(() => new THREE.SphereGeometry(0.48, 10, 8), []);
   const coreMaterial = useMemo(() => new THREE.MeshBasicMaterial({
     color: "#ffffff",
+    vertexColors: true,
     toneMapped: false,
   }), []);
   const glowMaterial = useMemo(() => new THREE.MeshBasicMaterial({
     color: "#ffffff",
+    vertexColors: true,
     toneMapped: false,
     transparent: true,
-    opacity: 0.18,
+    opacity: 0.28,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   }), []);
@@ -411,7 +413,7 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
     currentColors.current = points.map((point) => new THREE.Color(
       point.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[point.cluster],
     ));
-  }, [points.length, targetColor]);
+  }, [points]);
 
   useEffect(() => () => {
     coreGeometry.dispose();
@@ -517,6 +519,57 @@ function AnimatedCentroid({ position, index }: { position: Vec3; index: number }
           C{index + 1}
         </div>
       </Html>
+      </group>
+    </Trail>
+  );
+}
+
+function ClusterBoundaryTrail({ centroid, members, index }: {
+  centroid: Vec3;
+  members: PointDatum[];
+  index: number;
+}) {
+  const orbiter = useRef<THREE.Group>(null);
+  const shape = useMemo(() => {
+    const fallback = 3.4;
+    if (members.length === 0) return [fallback, fallback * 0.58, fallback] as Vec3;
+    const extent = members.reduce<[number, number, number]>((largest, point) => [
+      Math.max(largest[0], Math.abs(point.position[0] - centroid[0])),
+      Math.max(largest[1], Math.abs(point.position[1] - centroid[1])),
+      Math.max(largest[2], Math.abs(point.position[2] - centroid[2])),
+    ], [1.8, 1.5, 1.8]);
+    return [extent[0] + 1.15, Math.max(1.25, extent[1] * 0.58 + 0.85), extent[2] + 1.15] as Vec3;
+  }, [centroid, members]);
+  const target = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame(({ clock }) => {
+    if (!orbiter.current) return;
+    const phase = clock.getElapsedTime() * 3.35 + index * 1.71;
+    target.set(
+      centroid[0] + Math.cos(phase) * shape[0],
+      centroid[1] + Math.sin(phase * 2.0) * shape[1],
+      centroid[2] + Math.sin(phase) * shape[2],
+    );
+    orbiter.current.position.copy(target);
+  });
+
+  return (
+    <Trail
+      target={orbiter}
+      width={1.6}
+      length={9}
+      decay={0.88}
+      stride={0.012}
+      interval={1}
+      local={false}
+      color={CLUSTER_COLORS[index]}
+      attenuation={(t) => 0.58 + t * 0.42}
+    >
+      <group ref={orbiter}>
+        <mesh raycast={() => null}>
+          <sphereGeometry args={[0.13, 12, 10]} />
+          <meshBasicMaterial color={CLUSTER_COLORS[index]} toneMapped={false} />
+        </mesh>
       </group>
     </Trail>
   );
@@ -706,6 +759,14 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       {showVolumes && model.centroids.length > 0 && (
         <VoronoiVolumes key={runId} points={model.points} centroids={model.centroids} />
       )}
+      {showVolumes && model.phase !== "ready" && model.centroids.map((centroid, index) => (
+        <ClusterBoundaryTrail
+          key={`boundary-${runId}-${index}`}
+          centroid={centroid}
+          members={model.points.filter((point) => point.cluster === index)}
+          index={index}
+        />
+      ))}
       {model.centroids.map((centroid, index) => (
         <AnimatedCentroid key={`${runId}-${index}`} position={centroid} index={index} />
       ))}
