@@ -903,7 +903,7 @@ function formatMetric(value: number) {
 }
 
 export default function KMeansLab() {
-  const [config, setConfig] = useState<Config>({ dataset: "showcase", strategy: "plusplus", k: 5, pointCount: 360 });
+  const [config, setConfig] = useState<Config>({ dataset: "helix", strategy: "plusplus", k: 2, pointCount: 360 });
   const [seed, setSeed] = useState(1207);
   const [model, setModel] = useState<Model>(() => createModel(config, seed, 4921));
   const [runId, setRunId] = useState(0);
@@ -916,6 +916,7 @@ export default function KMeansLab() {
   const [showLinks, setShowLinks] = useState(true);
   const [showVolumes, setShowVolumes] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
+  const [mobilePanel, setMobilePanel] = useState<"controls" | "insights" | null>(null);
 
   const readyToRun = model.centroids.length === config.k;
   const step = useCallback(() => setModel((current) => (
@@ -951,6 +952,7 @@ export default function KMeansLab() {
       } else if (event.key === "Escape") {
         setSelected(null);
         setFocusedCluster(null);
+        setMobilePanel(null);
       } else if (/^[1-6]$/.test(event.key) && model.phase !== "ready") {
         const clusterIndex = Number(event.key) - 1;
         if (clusterIndex < model.centroids.length) {
@@ -1093,7 +1095,7 @@ export default function KMeansLab() {
       : { kicker: `Iteration ${model.iteration + 1} · Step 1`, title: "Assign every point", copy: "Measure Euclidean distance and give each observation to its nearest centroid." };
 
   return (
-    <main className="lab-shell">
+    <main className={`lab-shell ${mobilePanel ? `is-mobile-${mobilePanel}-open` : ""}`}>
       <div className={`scene-layer ${isSeeding ? "is-seeding" : ""}`} aria-label="Interactive three-dimensional K-means visualization">
         <Canvas
           camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
@@ -1120,7 +1122,39 @@ export default function KMeansLab() {
         </Canvas>
       </div>
 
-      <section className="control-panel" aria-label="K-means controls">
+      <button
+        type="button"
+        className="mobile-panel-backdrop"
+        onClick={() => setMobilePanel(null)}
+        aria-label="Close mobile panel"
+        tabIndex={mobilePanel ? 0 : -1}
+      />
+
+      <nav className="mobile-panel-dock" aria-label="Mobile interface panels">
+        <button
+          type="button"
+          className={mobilePanel === "controls" ? "is-active" : ""}
+          onClick={() => setMobilePanel((current) => current === "controls" ? null : "controls")}
+          aria-expanded={mobilePanel === "controls"}
+          aria-controls="kmeans-controls"
+        >
+          <span className="mobile-burger" aria-hidden="true"><i /><i /><i /></span>
+          Controls
+        </button>
+        <button
+          type="button"
+          className={mobilePanel === "insights" ? "is-active" : ""}
+          onClick={() => setMobilePanel((current) => current === "insights" ? null : "insights")}
+          aria-expanded={mobilePanel === "insights"}
+          aria-controls="kmeans-insights"
+        >
+          <span className="mobile-stats-icon" aria-hidden="true"><i /><i /><i /></span>
+          Stats
+        </button>
+      </nav>
+
+      <section id="kmeans-controls" className="control-panel" aria-label="K-means controls">
+        <button type="button" className="mobile-panel-close" onClick={() => setMobilePanel(null)} aria-label="Close controls">×</button>
         <header className="panel-header">
           <div className="brand-mark" aria-hidden="true"><i /><i /><i /></div>
           <div>
@@ -1243,7 +1277,8 @@ export default function KMeansLab() {
         <strong>{status.title}</strong>
       </div>
 
-      <aside className="insight-rail" aria-label="Algorithm explanation and metrics">
+      <aside id="kmeans-insights" className="insight-rail" aria-label="Algorithm explanation and metrics">
+        <button type="button" className="mobile-panel-close" onClick={() => setMobilePanel(null)} aria-label="Close diagnostics">×</button>
         <section className="insight-card primary-insight">
           <div className="card-heading">
             <span>Current operation</span>

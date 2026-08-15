@@ -35,7 +35,7 @@ K-Means 3D Lab turns the alternating assignment and centroid-update phases of K-
 - **Automatic convergence** — play every operation until assignments and centroid positions settle.
 - **Three initialization strategies** — compare random, K-means++, and farthest-point seeding.
 - **Manual centroid placement** — click observations in the scene to create the starting configuration you want.
-- **13 datasets** — move from clean Gaussian clouds to ribbons, moons, shells, outliers, noise, and braided manifolds.
+- **13 datasets** — begin with the double helix, then move through clean clouds, ribbons, moons, shells, outliers, and noise.
 - **Adjustable experiments** — select 2–6 clusters and generate 160–600 observations.
 - **Cluster-wide 3D hulls** — translucent envelopes reveal the full spatial extent of each assigned group.
 - **Point inspection** — pin an observation to read its coordinates, assignment, and distance from its centroid.
@@ -58,7 +58,7 @@ The interface deliberately separates assignment and update into individual opera
 
 | Dataset | Recommended K | What it demonstrates |
 | --- | ---: | --- |
-| Aurora archipelago | 5 | A spacious, clearly separated opening example. |
+| Aurora archipelago | 5 | A spacious, clearly separated reference example. |
 | Original eight points | 3 | The source coordinates from the original Python implementation. |
 | Gaussian constellations | 4 | Compact, similarly sized groups that suit K-means well. |
 | Unequal constellations | 4 | Groups with sharply different density and variance. |
