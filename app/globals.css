@@ -141,6 +141,24 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 560;
   line-height: 1.4;
 }
+.experiment-deck { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.experiment-deck button {
+  min-width: 0;
+  height: 29px;
+  overflow: hidden;
+  border: 1px solid rgba(177, 199, 218, 0.14);
+  border-radius: 5px;
+  color: #8198ab;
+  background: rgba(7, 13, 18, 0.42);
+  cursor: pointer;
+  font-size: 0.59rem;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+.experiment-deck button:hover { border-color: rgba(118, 228, 247, 0.38); color: #ecfbff; }
+.experiment-deck button.is-active { border-color: rgba(118, 228, 247, 0.34); color: var(--cyan); background: rgba(14, 116, 144, 0.15); }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .label-row strong { overflow: hidden; color: #91a7ba; font-size: 0.65rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .segmented-control { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; border: 1px solid rgba(177, 199, 218, 0.15); border-radius: 7px; background: rgba(7, 13, 18, 0.56); }
@@ -214,6 +232,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .layer-switch[aria-checked="true"] > span { background: rgba(118, 228, 247, 0.38); }
 .layer-switch[aria-checked="true"] i { background: var(--cyan); transform: translateX(12px); }
 
+.tempo-control { display: grid; gap: 7px; }
+
 .auto-run-button {
   display: grid;
   grid-template-columns: 38px 1fr;
@@ -257,7 +277,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .auto-run-button.is-running strong { color: #06261d; }
 .auto-run-button.is-running small { color: rgba(6, 38, 29, 0.7); }
 
-.secondary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; padding-top: 2px; }
+.secondary-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: auto; padding-top: 2px; }
 .secondary-actions button {
   height: 37px;
   border: 1px solid rgba(177, 199, 218, 0.2);
@@ -269,6 +289,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 760;
 }
 .secondary-actions button:hover { border-color: rgba(118, 228, 247, 0.4); background: rgba(14, 116, 144, 0.16); }
+.secondary-actions button:last-child { border-color: rgba(155, 216, 196, 0.24); color: #c9f5e7; background: rgba(30, 116, 91, 0.12); }
 
 .stage-chip {
   position: absolute;
@@ -330,10 +351,52 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .metric-grid > div { display: grid; gap: 5px; min-width: 0; padding: 10px; border: 1px solid rgba(177, 199, 218, 0.11); border-radius: 6px; background: rgba(7, 13, 18, 0.38); }
 .metric-grid strong { overflow: hidden; color: #ffffff; font-family: var(--font-geist-mono), monospace; font-size: 1.05rem; text-overflow: ellipsis; }
 .cluster-list { display: grid; gap: 3px; padding-top: 12px; border-top: 1px solid rgba(177, 199, 218, 0.12); }
-.cluster-list > div { display: grid; grid-template-columns: 8px 1fr auto; gap: 9px; align-items: center; min-height: 25px; }
+.cluster-list > button {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  min-height: 29px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 0 6px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+.cluster-list > button:hover:not(:disabled) { border-color: rgba(177, 199, 218, 0.14); background: rgba(118, 228, 247, 0.05); }
+.cluster-list > button.is-focused { border-color: rgba(118, 228, 247, 0.32); background: rgba(14, 116, 144, 0.15); }
+.cluster-list > button:disabled { cursor: default; }
 .cluster-list i { width: 7px; height: 7px; border-radius: 50%; }
 .cluster-list span { color: #aebfd0; font-size: 0.72rem; }
 .cluster-list strong { color: #f4f8fb; font-family: var(--font-geist-mono), monospace; font-size: 0.69rem; }
+
+.point-inspector { display: grid; gap: 13px; border-color: rgba(118, 228, 247, 0.28); }
+.point-inspector .card-heading button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(177, 199, 218, 0.16);
+  border-radius: 50%;
+  color: #9fb4c9;
+  background: rgba(7, 13, 18, 0.48);
+  cursor: pointer;
+  line-height: 1;
+}
+.point-inspector-title { display: flex; gap: 10px; align-items: center; }
+.point-inspector-title > i { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 18px currentColor; }
+.point-inspector-title > div { display: grid; gap: 2px; }
+.point-inspector-title strong { color: #ffffff; font-size: 0.88rem; }
+.point-inspector-title span { color: var(--muted); font-size: 0.65rem; }
+.coordinate-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.coordinate-grid > div { display: grid; gap: 4px; padding: 8px; border: 1px solid rgba(177, 199, 218, 0.12); border-radius: 5px; background: rgba(7, 13, 18, 0.42); }
+.coordinate-grid span { color: #70879a; font-size: 0.58rem; font-weight: 800; }
+.coordinate-grid strong { overflow: hidden; color: #e8fbff; font-family: var(--font-geist-mono), monospace; font-size: 0.69rem; text-overflow: ellipsis; }
+.point-inspector p { margin: 0; color: #aebfd0; font-size: 0.68rem; line-height: 1.45; }
 
 .playback-dock {
   position: absolute;
@@ -388,6 +451,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .centroid-label { padding: 4px 6px; font-family: var(--font-geist-mono), monospace; font-size: 0.6rem; font-weight: 850; }
 .point-tooltip { display: grid; gap: 2px; padding: 7px 9px; }
+.point-tooltip.is-pinned { border-color: rgba(118, 228, 247, 0.5); box-shadow: 0 0 0 1px rgba(118, 228, 247, 0.08), 0 12px 35px rgba(0, 0, 0, 0.34); }
 .point-tooltip strong { font-size: 0.7rem; }
 .point-tooltip span { color: var(--muted); font-size: 0.61rem; }
 .axis-label { color: #70879a; font-family: var(--font-geist-mono), monospace; font-size: 0.6rem; font-weight: 800; pointer-events: none; }

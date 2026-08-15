@@ -8,9 +8,10 @@ import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 type Vec3 = [number, number, number];
-type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
+type DatasetId = "showcase" | "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "helix" | "bridge" | "lattice" | "shells" | "outliers" | "noise";
 type Strategy = "random" | "plusplus" | "farthest";
 type Phase = "ready" | "assigned" | "updated" | "converged";
+type PlaybackSpeed = "observe" | "normal" | "turbo";
 
 type PointDatum = {
   id: number;
@@ -37,7 +38,7 @@ type Model = {
 };
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
-const NEUTRAL_COLOR = "#dbeafe";
+const NEUTRAL_COLOR = "#76e4f7";
 const PHI = (1 + Math.sqrt(5)) / 2;
 const CLUSTER_HALO_DIRECTIONS = [
   [0, -1, -PHI], [0, -1, PHI], [0, 1, -PHI], [0, 1, PHI],
@@ -49,46 +50,97 @@ const CLASSIC_POINTS: Vec3[] = [
   [4.8, -1.2, 1.6], [2.4, -2.4, -2.2], [-9.6, -6, 0.4], [-2.4, 4.8, -1.2],
 ];
 
-const DATASETS: Record<DatasetId, { name: string; short: string; note: string }> = {
+const DATASETS: Record<DatasetId, { name: string; short: string; note: string; recommendedK: number; badge: string }> = {
+  showcase: {
+    name: "Aurora archipelago",
+    short: "Five wide islands",
+    note: "Five crisp constellations spread across the full stage—a spacious, satisfying first run.",
+    recommendedK: 5,
+    badge: "Showcase",
+  },
   classic: {
     name: "Original eight points",
     short: "8-point source set",
     note: "The coordinates from the Python repository, lifted into a shallow third dimension.",
+    recommendedK: 3,
+    badge: "Original",
   },
   gaussian: {
     name: "Gaussian constellations",
     short: "Four soft clouds",
     note: "Compact, similarly sized groups—the kind of geometry K-means handles especially well.",
+    recommendedK: 4,
+    badge: "Clear",
   },
   varied: {
     name: "Unequal constellations",
     short: "Mixed density blobs",
     note: "Four clouds with sharply different variances test whether one value of K can describe uneven density.",
+    recommendedK: 4,
+    badge: "Challenge",
   },
   anisotropic: {
     name: "Anisotropic ribbons",
     short: "Rotated long-form clouds",
     note: "Diagonal, elongated groups expose K-means' preference for compact, spherical clusters.",
+    recommendedK: 3,
+    badge: "Challenge",
   },
   overlap: {
     name: "Overlapping currents",
     short: "Three stretched clouds",
     note: "Elongated groups cross one another, making the nearest-centroid boundary less obvious.",
+    recommendedK: 3,
+    badge: "Ambiguous",
   },
   moons: {
     name: "Interlocking moons",
     short: "Non-convex crescents",
     note: "Two curved manifolds make a beautiful failure case: proximity alone cannot preserve their shapes.",
+    recommendedK: 2,
+    badge: "Failure case",
+  },
+  helix: {
+    name: "Double helix",
+    short: "Braided manifolds",
+    note: "Two intertwined strands invite you to orbit the scene and watch a centroid method cut across topology.",
+    recommendedK: 2,
+    badge: "Wild",
+  },
+  bridge: {
+    name: "Island bridges",
+    short: "Connected groups",
+    note: "Three dense islands connected by sparse causeways reveal how a few points can pull a mean off-centre.",
+    recommendedK: 3,
+    badge: "Interactive",
+  },
+  lattice: {
+    name: "Signal lattice",
+    short: "Nine micro-clusters",
+    note: "A precise field of small pods rewards experimenting with K and isolating the resulting regions.",
+    recommendedK: 6,
+    badge: "Explore K",
   },
   shells: {
     name: "Concentric shells",
     short: "A deliberate failure case",
     note: "Nested spherical layers have no useful centre split, exposing a core limitation of K-means.",
+    recommendedK: 3,
+    badge: "Failure case",
+  },
+  outliers: {
+    name: "Outlier gravity",
+    short: "Clusters plus anomalies",
+    note: "Four stable clouds and a handful of distant observations show how strongly means react to extremes.",
+    recommendedK: 4,
+    badge: "Stress test",
   },
   noise: {
     name: "No structure",
     short: "Uniform null case",
     note: "A homogeneous field has no natural groups, yet K-means must still partition it into Voronoi regions.",
+    recommendedK: 4,
+    badge: "Null case",
   },
 };
 
@@ -97,6 +149,18 @@ const STRATEGIES: Record<Strategy, { label: string; detail: string }> = {
   plusplus: { label: "K-means++", detail: "Spread seeds probabilistically." },
   farthest: { label: "Farthest", detail: "Always choose the most distant point." },
 };
+
+const PLAYBACK_SPEEDS: Record<PlaybackSpeed, { label: string; delay: number }> = {
+  observe: { label: "Observe", delay: 1250 },
+  normal: { label: "Flow", delay: 760 },
+  turbo: { label: "Turbo", delay: 340 },
+};
+
+const EXPERIMENT_DECK: { dataset: DatasetId; label: string }[] = [
+  { dataset: "showcase", label: "Clean split" },
+  { dataset: "helix", label: "Break it" },
+  { dataset: "outliers", label: "Stress test" },
+];
 
 function mulberry32(seed: number) {
   return function random() {
@@ -133,7 +197,21 @@ function makePoints(dataset: DatasetId, requestedCount: number, seed: number): P
   const points: PointDatum[] = [];
   const count = requestedCount;
 
-  if (dataset === "gaussian") {
+  if (dataset === "showcase") {
+    const centers: Vec3[] = [[0, 10, 0], [0, -9, 0], [-13, 1, -11], [13, 1, -11], [0, 1, 14]];
+    for (let id = 0; id < count; id += 1) {
+      const center = centers[id % centers.length];
+      points.push({
+        id,
+        cluster: -1,
+        position: [
+          center[0] + gaussian(random) * 1.25,
+          center[1] + gaussian(random) * 1.1,
+          center[2] + gaussian(random) * 1.25,
+        ],
+      });
+    }
+  } else if (dataset === "gaussian") {
     const centers: Vec3[] = [[-11, -4, -9], [10, 7, -8], [-8, 8, 10], [10, -7, 9]];
     for (let id = 0; id < count; id += 1) {
       const center = centers[id % centers.length];
@@ -216,6 +294,94 @@ function makePoints(dataset: DatasetId, requestedCount: number, seed: number): P
         cluster: -1,
         position: [baseX + jitter(), baseY + jitter(), baseZ + jitter() * 1.6],
       });
+    }
+  } else if (dataset === "helix") {
+    for (let id = 0; id < count; id += 1) {
+      const group = id % 2;
+      const progress = random();
+      const angle = progress * Math.PI * 4 + group * Math.PI;
+      const radius = 7.1 + gaussian(random) * 0.38;
+      points.push({
+        id,
+        cluster: -1,
+        position: [
+          Math.cos(angle) * radius + gaussian(random) * 0.32,
+          (progress - 0.5) * 21 + gaussian(random) * 0.38,
+          Math.sin(angle) * radius + gaussian(random) * 0.32,
+        ],
+      });
+    }
+  } else if (dataset === "bridge") {
+    const centers: Vec3[] = [[-12, -5, -8], [0, 7, 0], [12, -5, 8]];
+    for (let id = 0; id < count; id += 1) {
+      const isBridge = id % 5 === 0;
+      if (isBridge) {
+        const segment = id % 10 === 0 ? 0 : 1;
+        const progress = random();
+        const from = centers[segment];
+        const to = centers[segment + 1];
+        points.push({
+          id,
+          cluster: -1,
+          position: [
+            THREE.MathUtils.lerp(from[0], to[0], progress) + gaussian(random) * 0.42,
+            THREE.MathUtils.lerp(from[1], to[1], progress) + gaussian(random) * 0.42,
+            THREE.MathUtils.lerp(from[2], to[2], progress) + gaussian(random) * 0.42,
+          ],
+        });
+      } else {
+        const center = centers[id % centers.length];
+        points.push({
+          id,
+          cluster: -1,
+          position: [
+            center[0] + gaussian(random) * 1.45,
+            center[1] + gaussian(random) * 1.25,
+            center[2] + gaussian(random) * 1.45,
+          ],
+        });
+      }
+    }
+  } else if (dataset === "lattice") {
+    const centers: Vec3[] = [];
+    for (let row = -1; row <= 1; row += 1) {
+      for (let column = -1; column <= 1; column += 1) {
+        centers.push([column * 10, (row + column) % 2 === 0 ? 4.5 : -4.5, row * 10]);
+      }
+    }
+    for (let id = 0; id < count; id += 1) {
+      const center = centers[id % centers.length];
+      points.push({
+        id,
+        cluster: -1,
+        position: [
+          center[0] + gaussian(random) * 0.9,
+          center[1] + gaussian(random) * 0.8,
+          center[2] + gaussian(random) * 0.9,
+        ],
+      });
+    }
+  } else if (dataset === "outliers") {
+    const centers: Vec3[] = [[-9, -5, -8], [9, 6, -7], [-8, 7, 9], [9, -6, 9]];
+    for (let id = 0; id < count; id += 1) {
+      if (id % 17 === 0) {
+        points.push({
+          id,
+          cluster: -1,
+          position: [(random() - 0.5) * 34, (random() - 0.5) * 25, (random() - 0.5) * 34],
+        });
+      } else {
+        const center = centers[id % centers.length];
+        points.push({
+          id,
+          cluster: -1,
+          position: [
+            center[0] + gaussian(random) * 1.35,
+            center[1] + gaussian(random) * 1.15,
+            center[2] + gaussian(random) * 1.35,
+          ],
+        });
+      }
     }
   } else if (dataset === "noise") {
     for (let id = 0; id < count; id += 1) {
@@ -367,22 +533,40 @@ function advanceModel(model: Model): Model {
   };
 }
 
-function PointCloud({ points, hovered, onHover, onPlace }: {
+function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSelect, onPlace }: {
   points: PointDatum[];
   hovered: number | null;
+  selected: number | null;
+  focusedCluster: number | null;
   onHover: (id: number | null) => void;
+  onSelect: (id: number | null) => void;
   onPlace?: (position: Vec3) => void;
 }) {
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const coreGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.3, 1), []);
-  const materials = useMemo(() => [NEUTRAL_COLOR, ...CLUSTER_COLORS].map((color) => new THREE.MeshStandardMaterial({
+  const glowGeometry = useMemo(() => new THREE.SphereGeometry(0.62, 12, 10), []);
+  const glowMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: NEUTRAL_COLOR,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    toneMapped: false,
+    blending: THREE.AdditiveBlending,
+  }), []);
+  const materials = useMemo(() => [NEUTRAL_COLOR, ...CLUSTER_COLORS].map((color, paletteIndex) => new THREE.MeshStandardMaterial({
     color,
     emissive: color,
-    emissiveIntensity: 0.82,
-    roughness: 0.32,
-    metalness: 0.08,
+    emissiveIntensity: paletteIndex === 0 ? 2.2 : 0.82,
+    roughness: paletteIndex === 0 ? 0.18 : 0.32,
+    metalness: paletteIndex === 0 ? 0.02 : 0.08,
     toneMapped: false,
   })), []);
+  const neutralPoints = useMemo(() => points.filter((point) => point.cluster < 0), [points]);
+  const neutralGlow = useMemo(() => new THREE.InstancedMesh(
+    glowGeometry,
+    glowMaterial,
+    neutralPoints.length,
+  ), [glowGeometry, glowMaterial, neutralPoints.length]);
 
   const batches = useMemo(() => {
     const groups = Array.from({ length: materials.length }, () => [] as PointDatum[]);
@@ -402,18 +586,38 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
     batches.forEach(({ mesh, points: batchPoints }) => {
       batchPoints.forEach((point, index) => {
         dummy.position.set(...point.position);
-        dummy.scale.setScalar(point.id === hovered ? 1.55 : point.cluster < 0 ? 0.94 : 1.06);
+        const isDimmed = focusedCluster !== null && point.cluster !== focusedCluster && point.id !== selected;
+        const scale = point.id === selected
+          ? 1.95
+          : point.id === hovered
+            ? 1.58
+            : point.cluster < 0
+              ? 1.14
+              : 1.06;
+        dummy.scale.setScalar(isDimmed ? scale * 0.24 : scale);
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);
       });
       mesh.instanceMatrix.needsUpdate = true;
     });
-  }, [batches, dummy, hovered]);
+  }, [batches, dummy, focusedCluster, hovered, selected]);
+
+  useEffect(() => {
+    neutralPoints.forEach((point, index) => {
+      dummy.position.set(...point.position);
+      dummy.scale.setScalar(point.id === selected ? 1.5 : point.id === hovered ? 1.28 : 1);
+      dummy.updateMatrix();
+      neutralGlow.setMatrixAt(index, dummy.matrix);
+    });
+    neutralGlow.instanceMatrix.needsUpdate = true;
+  }, [dummy, hovered, neutralGlow, neutralPoints, selected]);
 
   useEffect(() => () => {
     coreGeometry.dispose();
+    glowGeometry.dispose();
+    glowMaterial.dispose();
     materials.forEach((material) => material.dispose());
-  }, [coreGeometry, materials]);
+  }, [coreGeometry, glowGeometry, glowMaterial, materials]);
 
   const handlePointer = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -423,23 +627,26 @@ function PointCloud({ points, hovered, onHover, onPlace }: {
     onHover(pointId ?? null);
   };
 
-  const handlePlace = (event: ThreeEvent<MouseEvent>) => {
-    if (!onPlace || !Number.isInteger(event.instanceId)) return;
+  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    if (!Number.isInteger(event.instanceId)) return;
     event.stopPropagation();
     const pointId = event.object.userData.pointIds?.[event.instanceId as number];
     const point = points.find((candidate) => candidate.id === pointId);
-    if (point) onPlace(point.position);
+    if (!point) return;
+    if (onPlace) onPlace(point.position);
+    else onSelect(point.id === selected ? null : point.id);
   };
 
   return (
     <>
+      {neutralPoints.length > 0 && <primitive object={neutralGlow} raycast={() => null} />}
       {batches.map(({ mesh }) => (
         <primitive
           key={mesh.uuid}
           object={mesh}
           onPointerMove={handlePointer}
           onPointerOut={() => onHover(null)}
-          onClick={handlePlace}
+          onClick={handleClick}
         />
       ))}
     </>
@@ -501,63 +708,13 @@ function AnimatedCentroid({ position, index }: { position: Vec3; index: number }
   );
 }
 
-function ClusterBoundaryTrail({ centroid, members, index }: {
-  centroid: Vec3;
-  members: PointDatum[];
-  index: number;
-}) {
-  const orbiter = useRef<THREE.Group>(null);
-  const shape = useMemo(() => {
-    const fallback = 3.4;
-    if (members.length === 0) return [fallback, fallback * 0.58, fallback] as Vec3;
-    const extent = members.reduce<[number, number, number]>((largest, point) => [
-      Math.max(largest[0], Math.abs(point.position[0] - centroid[0])),
-      Math.max(largest[1], Math.abs(point.position[1] - centroid[1])),
-      Math.max(largest[2], Math.abs(point.position[2] - centroid[2])),
-    ], [1.8, 1.5, 1.8]);
-    return [extent[0] + 1.15, Math.max(1.25, extent[1] * 0.58 + 0.85), extent[2] + 1.15] as Vec3;
-  }, [centroid, members]);
-  const target = useMemo(() => new THREE.Vector3(), []);
-
-  useFrame(({ clock }) => {
-    if (!orbiter.current) return;
-    const phase = clock.getElapsedTime() * 3.35 + index * 1.71;
-    target.set(
-      centroid[0] + Math.cos(phase) * shape[0],
-      centroid[1] + Math.sin(phase * 2.0) * shape[1],
-      centroid[2] + Math.sin(phase) * shape[2],
-    );
-    orbiter.current.position.copy(target);
-  });
-
-  return (
-    <Trail
-      target={orbiter}
-      width={1.6}
-      length={9}
-      decay={0.88}
-      stride={0.012}
-      interval={1}
-      local={false}
-      color={CLUSTER_COLORS[index]}
-      attenuation={(t) => 0.58 + t * 0.42}
-    >
-      <group ref={orbiter}>
-        <mesh raycast={() => null}>
-          <sphereGeometry args={[0.13, 12, 10]} />
-          <meshBasicMaterial color={CLUSTER_COLORS[index]} toneMapped={false} />
-        </mesh>
-      </group>
-    </Trail>
-  );
-}
-
-function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
+function ConnectionLines({ points, centroids, focusedCluster }: { points: PointDatum[]; centroids: Vec3[]; focusedCluster: number | null }) {
   const geometry = useMemo(() => {
     const positions: number[] = [];
     const colors: number[] = [];
     points.forEach((point) => {
       if (point.cluster < 0) return;
+      if (focusedCluster !== null && point.cluster !== focusedCluster) return;
       positions.push(...point.position, ...centroids[point.cluster]);
       const color = new THREE.Color(CLUSTER_COLORS[point.cluster]);
       colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
@@ -566,7 +723,7 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
     output.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     output.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     return output;
-  }, [centroids, points]);
+  }, [centroids, focusedCluster, points]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
@@ -653,17 +810,22 @@ function ClusterShell({ members, index }: { members: PointDatum[]; index: number
   );
 }
 
-function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHover, onPlace }: {
+function Scene({ model, runId, hovered, selected, focusedCluster, showLinks, showVolumes, autoRotate, onHover, onSelect, onPlace }: {
   model: Model;
   runId: number;
   hovered: number | null;
+  selected: number | null;
+  focusedCluster: number | null;
   showLinks: boolean;
   showVolumes: boolean;
   autoRotate: boolean;
   onHover: (id: number | null) => void;
+  onSelect: (id: number | null) => void;
   onPlace?: (position: Vec3) => void;
 }) {
   const hoveredPoint = hovered === null ? null : model.points.find((point) => point.id === hovered);
+  const selectedPoint = selected === null ? null : model.points.find((point) => point.id === selected);
+  const inspectedPoint = hoveredPoint ?? selectedPoint;
   const clusterMembers = useMemo(() => model.centroids.map((_, index) => (
     model.points.filter((point) => point.cluster === index)
   )), [model.centroids, model.points]);
@@ -674,31 +836,35 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <ambientLight intensity={1.35} color="#c7d4df" />
       <directionalLight position={[12, 18, 9]} intensity={2.35} color="#ffffff" />
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
-      <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
-      {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
+      <PointCloud
+        points={model.points}
+        hovered={hovered}
+        selected={selected}
+        focusedCluster={focusedCluster}
+        onHover={onHover}
+        onSelect={onSelect}
+        onPlace={onPlace}
+      />
+      {showLinks && model.phase !== "ready" && (
+        <ConnectionLines points={model.points} centroids={model.centroids} focusedCluster={focusedCluster} />
+      )}
       {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
+        focusedCluster === null || focusedCluster === index ? (
         <ClusterShell
           key={`shell-${runId}-${index}`}
           members={clusterMembers[index]}
           index={index}
         />
-      ))}
-      {showVolumes && model.phase !== "ready" && model.centroids.map((centroid, index) => (
-        <ClusterBoundaryTrail
-          key={`boundary-${runId}-${index}`}
-          centroid={centroid}
-          members={clusterMembers[index]}
-          index={index}
-        />
+        ) : null
       ))}
       {model.centroids.map((centroid, index) => (
         <AnimatedCentroid key={`${runId}-${index}`} position={centroid} index={index} />
       ))}
-      {hoveredPoint && (
-        <Html position={[hoveredPoint.position[0], hoveredPoint.position[1] + 0.9, hoveredPoint.position[2]]} center zIndexRange={[60, 0]}>
-          <div className="point-tooltip">
-            <strong>Point {hoveredPoint.id + 1}</strong>
-            <span>{hoveredPoint.cluster < 0 ? "Unassigned" : `Cluster ${hoveredPoint.cluster + 1}`}</span>
+      {inspectedPoint && (
+        <Html position={[inspectedPoint.position[0], inspectedPoint.position[1] + 0.9, inspectedPoint.position[2]]} center zIndexRange={[60, 0]}>
+          <div className={`point-tooltip ${selectedPoint?.id === inspectedPoint.id ? "is-pinned" : ""}`}>
+            <strong>Point {inspectedPoint.id + 1}</strong>
+            <span>{inspectedPoint.cluster < 0 ? "Unassigned" : `Cluster ${inspectedPoint.cluster + 1}`}</span>
           </div>
         </Html>
       )}
@@ -737,13 +903,16 @@ function formatMetric(value: number) {
 }
 
 export default function KMeansLab() {
-  const [config, setConfig] = useState<Config>({ dataset: "gaussian", strategy: "plusplus", k: 4, pointCount: 320 });
+  const [config, setConfig] = useState<Config>({ dataset: "showcase", strategy: "plusplus", k: 5, pointCount: 360 });
   const [seed, setSeed] = useState(1207);
   const [model, setModel] = useState<Model>(() => createModel(config, seed, 4921));
   const [runId, setRunId] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [focusedCluster, setFocusedCluster] = useState<number | null>(null);
+  const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>("normal");
   const [showLinks, setShowLinks] = useState(true);
   const [showVolumes, setShowVolumes] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
@@ -758,9 +927,9 @@ export default function KMeansLab() {
       if (model.phase === "converged") setIsPlaying(false);
       return undefined;
     }
-    const timer = window.setInterval(step, 820);
+    const timer = window.setInterval(step, PLAYBACK_SPEEDS[playbackSpeed].delay);
     return () => window.clearInterval(timer);
-  }, [isPlaying, model.phase, readyToRun, step]);
+  }, [isPlaying, model.phase, playbackSpeed, readyToRun, step]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -779,6 +948,14 @@ export default function KMeansLab() {
         setRunId((current) => current + 1);
         setIsSeeding(false);
         setModel(createModel(config, seed, Math.floor(Math.random() * 1_000_000_000)));
+      } else if (event.key === "Escape") {
+        setSelected(null);
+        setFocusedCluster(null);
+      } else if (/^[1-6]$/.test(event.key) && model.phase !== "ready") {
+        const clusterIndex = Number(event.key) - 1;
+        if (clusterIndex < model.centroids.length) {
+          setFocusedCluster((current) => current === clusterIndex ? null : clusterIndex);
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -789,6 +966,8 @@ export default function KMeansLab() {
     setIsPlaying(false);
     setIsSeeding(false);
     setHovered(null);
+    setSelected(null);
+    setFocusedCluster(null);
     setRunId((current) => current + 1);
     setConfig(nextConfig);
     setModel(createModel(nextConfig, nextSeed, Math.floor(Math.random() * 1_000_000_000)));
@@ -798,16 +977,34 @@ export default function KMeansLab() {
     rebuild({ ...config, [key]: value });
   };
 
+  const selectDataset = (dataset: DatasetId) => {
+    rebuild({
+      ...config,
+      dataset,
+      k: DATASETS[dataset].recommendedK,
+    });
+  };
+
   const newSample = () => {
     const nextSeed = Math.floor(Math.random() * 1_000_000_000);
     setSeed(nextSeed);
     rebuild(config, nextSeed);
   };
 
+  const surpriseMe = () => {
+    const options = (Object.keys(DATASETS) as DatasetId[]).filter((dataset) => dataset !== config.dataset && dataset !== "classic");
+    const dataset = options[Math.floor(Math.random() * options.length)];
+    const nextSeed = Math.floor(Math.random() * 1_000_000_000);
+    setSeed(nextSeed);
+    rebuild({ ...config, dataset, k: DATASETS[dataset].recommendedK }, nextSeed);
+  };
+
   const clearForPlacement = () => {
     setIsPlaying(false);
     setIsSeeding(true);
     setHovered(null);
+    setSelected(null);
+    setFocusedCluster(null);
     setRunId((current) => current + 1);
     setModel((current) => ({
       ...current,
@@ -846,6 +1043,8 @@ export default function KMeansLab() {
   const addRandomCentroid = () => {
     setIsPlaying(false);
     setHovered(null);
+    setSelected(null);
+    setFocusedCluster(null);
     if (model.centroids.length >= config.k) setRunId((current) => current + 1);
     const centroids = model.centroids.length >= config.k ? [] : model.centroids;
     const candidates = model.points.filter((point) => (
@@ -879,6 +1078,11 @@ export default function KMeansLab() {
     model.points.filter((point) => point.cluster === index).length
   )), [model.centroids, model.points]);
 
+  const selectedPoint = selected === null ? null : model.points.find((point) => point.id === selected) ?? null;
+  const selectedDistance = selectedPoint && selectedPoint.cluster >= 0
+    ? Math.sqrt(distanceSquared(selectedPoint.position, model.centroids[selectedPoint.cluster]))
+    : null;
+
   const nextAction = model.phase === "assigned" ? "Update centroids" : "Assign points";
   const status = !readyToRun
     ? { kicker: "Centroid setup", title: `Place seed ${model.centroids.length + 1} of ${config.k}`, copy: "Click an observation to use its exact 3D position, or add a random seed from the controls." }
@@ -895,16 +1099,22 @@ export default function KMeansLab() {
           camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
           dpr={[1, 1.75]}
           gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
-          onPointerMissed={() => setHovered(null)}
+          onPointerMissed={() => {
+            setHovered(null);
+            if (!isSeeding) setSelected(null);
+          }}
         >
           <Scene
             model={model}
             runId={runId}
             hovered={hovered}
+            selected={selected}
+            focusedCluster={focusedCluster}
             showLinks={showLinks}
             showVolumes={showVolumes}
             autoRotate={autoRotate}
             onHover={setHovered}
+            onSelect={setSelected}
             onPlace={isSeeding ? placeCentroid : undefined}
           />
         </Canvas>
@@ -921,11 +1131,23 @@ export default function KMeansLab() {
         <p className="lede">Assign points. Update centroids. Repeat until the geometry stops changing.</p>
 
         <div className="control-group">
-          <label htmlFor="dataset">Dataset</label>
-          <select id="dataset" value={config.dataset} onChange={(event) => changeConfig("dataset", event.target.value as DatasetId)}>
+          <div className="label-row"><label htmlFor="dataset">Dataset</label><strong>{DATASETS[config.dataset].badge}</strong></div>
+          <select id="dataset" value={config.dataset} onChange={(event) => selectDataset(event.target.value as DatasetId)}>
             {Object.entries(DATASETS).map(([id, dataset]) => <option key={id} value={id}>{dataset.name}</option>)}
           </select>
           <small>{DATASETS[config.dataset].note}</small>
+          <div className="experiment-deck" aria-label="Curated experiments">
+            {EXPERIMENT_DECK.map((experiment) => (
+              <button
+                key={experiment.dataset}
+                type="button"
+                className={config.dataset === experiment.dataset ? "is-active" : ""}
+                onClick={() => selectDataset(experiment.dataset)}
+              >
+                {experiment.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="control-group">
@@ -980,6 +1202,22 @@ export default function KMeansLab() {
           <Switch checked={autoRotate} onChange={() => setAutoRotate((value) => !value)} label="Auto orbit" />
         </div>
 
+        <div className="tempo-control">
+          <div className="label-row"><span>Playback tempo</span><strong>{PLAYBACK_SPEEDS[playbackSpeed].delay} ms</strong></div>
+          <div className="segmented-control" aria-label="Autoplay speed">
+            {(Object.keys(PLAYBACK_SPEEDS) as PlaybackSpeed[]).map((speed) => (
+              <button
+                key={speed}
+                type="button"
+                className={playbackSpeed === speed ? "is-active" : ""}
+                onClick={() => setPlaybackSpeed(speed)}
+              >
+                {PLAYBACK_SPEEDS[speed].label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <button
           type="button"
           className={`auto-run-button ${isPlaying ? "is-running" : ""}`}
@@ -996,6 +1234,7 @@ export default function KMeansLab() {
         <div className="secondary-actions">
           <button type="button" onClick={() => rebuild(config)}>Reset</button>
           <button type="button" onClick={newSample}>New sample</button>
+          <button type="button" onClick={surpriseMe}>Surprise me</button>
         </div>
       </section>
 
@@ -1033,14 +1272,41 @@ export default function KMeansLab() {
           </div>
           <div className="cluster-list">
             {model.centroids.map((_, index) => (
-              <div key={index}>
+              <button
+                key={index}
+                type="button"
+                className={focusedCluster === index ? "is-focused" : ""}
+                onClick={() => setFocusedCluster((current) => current === index ? null : index)}
+                disabled={model.phase === "ready"}
+                aria-pressed={focusedCluster === index}
+                title={`Isolate cluster ${index + 1}`}
+              >
                 <i style={{ background: CLUSTER_COLORS[index], boxShadow: `0 0 16px ${CLUSTER_COLORS[index]}55` }} />
                 <span>Cluster {index + 1}</span>
                 <strong>{model.phase === "ready" ? "—" : clusterCounts[index]} pts</strong>
-              </div>
+              </button>
             ))}
           </div>
         </section>
+
+        {selectedPoint && (
+          <section className="insight-card point-inspector" aria-label={`Point ${selectedPoint.id + 1} inspector`}>
+            <div className="card-heading">
+              <span>Pinned observation</span>
+              <button type="button" onClick={() => setSelected(null)} aria-label="Close point inspector">×</button>
+            </div>
+            <div className="point-inspector-title">
+              <i style={{ background: selectedPoint.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[selectedPoint.cluster] }} />
+              <div><strong>Point {selectedPoint.id + 1}</strong><span>{selectedPoint.cluster < 0 ? "Awaiting assignment" : `Cluster ${selectedPoint.cluster + 1}`}</span></div>
+            </div>
+            <div className="coordinate-grid">
+              {selectedPoint.position.map((coordinate, index) => (
+                <div key={index}><span>{["X", "Y", "Z"][index]}</span><strong>{coordinate.toFixed(2)}</strong></div>
+              ))}
+            </div>
+            <p>{selectedDistance === null ? "Run an assignment step to measure this point against its centroid." : `${selectedDistance.toFixed(2)} units from its current centroid.`}</p>
+          </section>
+        )}
       </aside>
 
       <section className="playback-dock" aria-label="Algorithm playback">
@@ -1068,7 +1334,7 @@ export default function KMeansLab() {
       </section>
 
       <div className="scene-hint">
-        <span>{isSeeding ? "Click a point to seed" : "Drag to orbit"}</span><i /> <span>Scroll to zoom</span><i /> <span>Space to step</span>
+        <span>{isSeeding ? "Click a point to seed" : "Click a point to inspect"}</span><i /> <span>Drag to orbit</span><i /> <span>1–6 isolate clusters</span><i /> <span>Space to step</span>
       </div>
     </main>
   );
