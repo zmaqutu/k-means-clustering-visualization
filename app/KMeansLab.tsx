@@ -4,7 +4,8 @@ import { Html, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { MarchingCubes } from "three/examples/jsm/objects/MarchingCubes.js";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 type Vec3 = [number, number, number];
 type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
@@ -37,6 +38,12 @@ type Model = {
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
 const NEUTRAL_COLOR = "#dbeafe";
+const PHI = (1 + Math.sqrt(5)) / 2;
+const CLUSTER_HALO_DIRECTIONS = [
+  [0, -1, -PHI], [0, -1, PHI], [0, 1, -PHI], [0, 1, PHI],
+  [-1, -PHI, 0], [-1, PHI, 0], [1, -PHI, 0], [1, PHI, 0],
+  [-PHI, 0, -1], [-PHI, 0, 1], [PHI, 0, -1], [PHI, 0, 1],
+].map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize());
 const CLASSIC_POINTS: Vec3[] = [
   [-7.2, 4.8, -1.6], [-7.2, -1.2, 1.2], [7.2, -2.4, -1.1], [0, 3.6, 2.4],
   [4.8, -1.2, 1.6], [2.4, -2.4, -2.2], [-9.6, -6, 0.4], [-2.4, 4.8, -1.2],
@@ -596,8 +603,26 @@ const haloFragmentShader = `
 `;
 
 function ClusterShell({ members, index }: { members: PointDatum[]; index: number }) {
-  const effect = useMemo(() => {
-    const material = new THREE.ShaderMaterial({
+  const geometry = useMemo(() => {
+    if (members.length === 0) return null;
+
+    const padding = 0.9;
+    const samples = members.flatMap((point) => {
+      const position = new THREE.Vector3(...point.position);
+      return CLUSTER_HALO_DIRECTIONS.map((direction) => (
+        position.clone().addScaledVector(direction, padding)
+      ));
+    });
+    const hull = new ConvexGeometry(samples);
+    const smoothedHull = mergeVertices(hull, 0.001);
+    hull.dispose();
+    smoothedHull.computeVertexNormals();
+    smoothedHull.computeBoundingSphere();
+    return smoothedHull;
+  }, [members]);
+
+  const material = useMemo(() => (
+    new THREE.ShaderMaterial({
       vertexShader: haloVertexShader,
       fragmentShader: haloFragmentShader,
       uniforms: { uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) } },
@@ -606,52 +631,26 @@ function ClusterShell({ members, index }: { members: PointDatum[]; index: number
       side: THREE.DoubleSide,
       toneMapped: false,
       blending: THREE.AdditiveBlending,
-    });
-    const mesh = new MarchingCubes(32, material, false, false, 28000);
-    mesh.isolation = 82;
-    mesh.renderOrder = -3;
-    mesh.frustumCulled = false;
-    return mesh;
-  }, [index]);
-
-  useEffect(() => {
-    if (members.length < 4) {
-      effect.geometry.setDrawRange(0, 0);
-      return;
-    }
-    const bounds = new THREE.Box3().setFromPoints(members.map((point) => new THREE.Vector3(...point.position))).expandByScalar(1.45);
-    const centre = bounds.getCenter(new THREE.Vector3());
-    const rawSize = bounds.getSize(new THREE.Vector3());
-    const size = new THREE.Vector3(
-      Math.max(rawSize.x, 3.8),
-      Math.max(rawSize.y, 3.8),
-      Math.max(rawSize.z, 3.8),
-    );
-    bounds.setFromCenterAndSize(centre, size);
-    const minimum = bounds.min;
-    const stride = Math.max(1, Math.ceil(members.length / 78));
-    effect.reset();
-    members.forEach((point, memberIndex) => {
-      if (memberIndex % stride !== 0) return;
-      effect.addBall(
-        (point.position[0] - minimum.x) / size.x,
-        (point.position[1] - minimum.y) / size.y,
-        (point.position[2] - minimum.z) / size.z,
-        0.34,
-        13,
-      );
-    });
-    effect.position.copy(centre);
-    effect.scale.set(size.x * 0.5, size.y * 0.5, size.z * 0.5);
-    effect.update();
-  }, [effect, members]);
+    })
+  ), [index]);
 
   useEffect(() => () => {
-    effect.geometry.dispose();
-    (effect.material as THREE.Material).dispose();
-  }, [effect]);
+    geometry?.dispose();
+  }, [geometry]);
 
-  return <primitive object={effect} />;
+  useEffect(() => () => material.dispose(), [material]);
+
+  if (!geometry) return null;
+
+  return (
+    <mesh
+      geometry={geometry}
+      material={material}
+      renderOrder={-3}
+      frustumCulled={false}
+      raycast={() => null}
+    />
+  );
 }
 
 function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHover, onPlace }: {
@@ -665,6 +664,9 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
   onPlace?: (position: Vec3) => void;
 }) {
   const hoveredPoint = hovered === null ? null : model.points.find((point) => point.id === hovered);
+  const clusterMembers = useMemo(() => model.centroids.map((_, index) => (
+    model.points.filter((point) => point.cluster === index)
+  )), [model.centroids, model.points]);
   return (
     <>
       <color attach="background" args={["#101820"]} />
@@ -677,7 +679,7 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
         <ClusterShell
           key={`shell-${runId}-${index}`}
-          members={model.points.filter((point) => point.cluster === index)}
+          members={clusterMembers[index]}
           index={index}
         />
       ))}
@@ -685,7 +687,7 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
         <ClusterBoundaryTrail
           key={`boundary-${runId}-${index}`}
           centroid={centroid}
-          members={model.points.filter((point) => point.cluster === index)}
+          members={clusterMembers[index]}
           index={index}
         />
       ))}
