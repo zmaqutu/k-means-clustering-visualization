@@ -36,7 +36,7 @@ type Model = {
 };
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
-const NEUTRAL_COLOR = "#8fdcff";
+const NEUTRAL_COLOR = "#dbeafe";
 const CLASSIC_POINTS: Vec3[] = [
   [-7.2, 4.8, -1.6], [-7.2, -1.2, 1.2], [7.2, -2.4, -1.1], [0, 3.6, 2.4],
   [4.8, -1.2, 1.6], [2.4, -2.4, -2.2], [-9.6, -6, 0.4], [-2.4, 4.8, -1.2],
@@ -113,13 +113,8 @@ function distanceSquared(a: Vec3, b: Vec3) {
   return dx * dx + dy * dy + dz * dz;
 }
 
-function displayedCluster(point: PointDatum, centroids: Vec3[]) {
-  if (point.cluster >= 0) return point.cluster;
-  if (!centroids.length) return -1;
-
-  return centroids.reduce((closest, centroid, index) => (
-    distanceSquared(point.position, centroid) < distanceSquared(point.position, centroids[closest]) ? index : closest
-  ), 0);
+function displayedCluster(point: PointDatum) {
+  return point.cluster;
 }
 
 function makePoints(dataset: DatasetId, requestedCount: number, seed: number): PointDatum[] {
@@ -365,9 +360,8 @@ function advanceModel(model: Model): Model {
   };
 }
 
-function PointCloud({ points, centroids, hovered, onHover, onPlace }: {
+function PointCloud({ points, hovered, onHover, onPlace }: {
   points: PointDatum[];
-  centroids: Vec3[];
   hovered: number | null;
   onHover: (id: number | null) => void;
   onPlace?: (position: Vec3) => void;
@@ -386,7 +380,7 @@ function PointCloud({ points, centroids, hovered, onHover, onPlace }: {
   const batches = useMemo(() => {
     const groups = Array.from({ length: materials.length }, () => [] as PointDatum[]);
     points.forEach((point) => {
-      const cluster = displayedCluster(point, centroids);
+      const cluster = displayedCluster(point);
       groups[cluster + 1].push(point);
     });
 
@@ -395,7 +389,7 @@ function PointCloud({ points, centroids, hovered, onHover, onPlace }: {
       mesh.userData.pointIds = group.map((point) => point.id);
       return { mesh, points: group };
     }).filter((batch) => batch.points.length > 0);
-  }, [centroids, coreGeometry, materials, points]);
+  }, [coreGeometry, materials, points]);
 
   useEffect(() => {
     batches.forEach(({ mesh, points: batchPoints }) => {
@@ -576,18 +570,42 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
   );
 }
 
+const haloVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewDirection;
+
+  void main() {
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    vNormal = normalize(normalMatrix * normal);
+    vViewDirection = normalize(-viewPosition.xyz);
+    gl_Position = projectionMatrix * viewPosition;
+  }
+`;
+
+const haloFragmentShader = `
+  uniform vec3 uColor;
+  varying vec3 vNormal;
+  varying vec3 vViewDirection;
+
+  void main() {
+    float facing = abs(dot(normalize(vNormal), normalize(vViewDirection)));
+    float fresnel = pow(1.0 - facing, 2.25);
+    float alpha = 0.018 + fresnel * 0.16;
+    gl_FragColor = vec4(uColor, alpha);
+  }
+`;
+
 function ClusterShell({ members, index }: { members: PointDatum[]; index: number }) {
   const effect = useMemo(() => {
-    const material = new THREE.MeshStandardMaterial({
-      color: CLUSTER_COLORS[index],
-      emissive: CLUSTER_COLORS[index],
-      emissiveIntensity: 0.08,
-      metalness: 0.04,
-      roughness: 0.28,
+    const material = new THREE.ShaderMaterial({
+      vertexShader: haloVertexShader,
+      fragmentShader: haloFragmentShader,
+      uniforms: { uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) } },
       transparent: true,
-      opacity: 0.26,
       depthWrite: false,
       side: THREE.DoubleSide,
+      toneMapped: false,
+      blending: THREE.AdditiveBlending,
     });
     const mesh = new MarchingCubes(32, material, false, false, 28000);
     mesh.isolation = 82;
@@ -654,7 +672,7 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <ambientLight intensity={1.35} color="#c7d4df" />
       <directionalLight position={[12, 18, 9]} intensity={2.35} color="#ffffff" />
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
-      <PointCloud points={model.points} centroids={model.centroids} hovered={hovered} onHover={onHover} onPlace={onPlace} />
+      <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
       {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
         <ClusterShell
