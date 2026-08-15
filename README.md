@@ -7,8 +7,8 @@ An interactive Three.js visualization of the K-means clustering algorithm. The l
 - Alternate between point assignment and centroid update steps.
 - Run automatically until convergence or advance one operation at a time.
 - Compare random, farthest-point, and K-means++ initialization.
-- Change K from 2–6 and generate up to 300 observations.
-- Try compact Gaussian groups, overlapping elongated clouds, concentric shells, or the original eight Python points.
+- Change K from 2–6 and generate up to 600 observations.
+- Explore compact and unequal Gaussian groups, anisotropic ribbons, interlocking moons, overlapping currents, concentric shells, uniform noise, or the original eight Python points.
 - Toggle centroid fields, point-to-centroid distance lines, and camera orbiting.
 - Watch inertia, moved points, centroid shift, cluster sizes, and centroid trails update live.
 
@@ -25,6 +25,16 @@ Then open `http://localhost:3000`.
 
 ```bash
 npm run build
+```
+
+## GitHub Pages
+
+Every push to `main` runs `.github/workflows/deploy-pages.yml`. The workflow builds a dedicated static Vite entry and publishes `dist-pages` through GitHub's official Pages actions. For the first deployment, set the repository's **Settings → Pages → Source** to **GitHub Actions**.
+
+To verify the static build locally:
+
+```bash
+npm run build:pages
 ```
 
 ## Controls

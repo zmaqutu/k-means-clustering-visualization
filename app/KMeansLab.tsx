@@ -4,10 +4,9 @@ import { Html, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 type Vec3 = [number, number, number];
-type DatasetId = "classic" | "gaussian" | "overlap" | "shells";
+type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
 type Strategy = "random" | "plusplus" | "farthest";
 type Phase = "ready" | "assigned" | "updated" | "converged";
 
@@ -53,15 +52,35 @@ const DATASETS: Record<DatasetId, { name: string; short: string; note: string }>
     short: "Four soft clouds",
     note: "Compact, similarly sized groups—the kind of geometry K-means handles especially well.",
   },
+  varied: {
+    name: "Unequal constellations",
+    short: "Mixed density blobs",
+    note: "Four clouds with sharply different variances test whether one value of K can describe uneven density.",
+  },
+  anisotropic: {
+    name: "Anisotropic ribbons",
+    short: "Rotated long-form clouds",
+    note: "Diagonal, elongated groups expose K-means' preference for compact, spherical clusters.",
+  },
   overlap: {
     name: "Overlapping currents",
     short: "Three stretched clouds",
     note: "Elongated groups cross one another, making the nearest-centroid boundary less obvious.",
   },
+  moons: {
+    name: "Interlocking moons",
+    short: "Non-convex crescents",
+    note: "Two curved manifolds make a beautiful failure case: proximity alone cannot preserve their shapes.",
+  },
   shells: {
     name: "Concentric shells",
     short: "A deliberate failure case",
     note: "Nested spherical layers have no useful centre split, exposing a core limitation of K-means.",
+  },
+  noise: {
+    name: "No structure",
+    short: "Uniform null case",
+    note: "A homogeneous field has no natural groups, yet K-means must still partition it into Voronoi regions.",
   },
 };
 
@@ -103,21 +122,57 @@ function makePoints(dataset: DatasetId, requestedCount: number, seed: number): P
   const count = requestedCount;
 
   if (dataset === "gaussian") {
-    const centers: Vec3[] = [[-7, 2, -5], [7, 3, -4], [-2, -4, 7], [7, -3, 6]];
+    const centers: Vec3[] = [[-11, -4, -9], [10, 7, -8], [-8, 8, 10], [10, -7, 9]];
     for (let id = 0; id < count; id += 1) {
       const center = centers[id % centers.length];
       points.push({
         id,
         cluster: -1,
         position: [
-          center[0] + gaussian(random) * 1.75,
-          center[1] + gaussian(random) * 1.35,
-          center[2] + gaussian(random) * 1.75,
+          center[0] + gaussian(random) * 1.7,
+          center[1] + gaussian(random) * 1.5,
+          center[2] + gaussian(random) * 1.7,
         ],
       });
     }
+  } else if (dataset === "varied") {
+    const centers: Vec3[] = [[-11, -5, -9], [9, 7, -8], [-8, 8, 10], [10, -7, 9]];
+    const spreads = [0.8, 2.9, 1.35, 2.05];
+    for (let id = 0; id < count; id += 1) {
+      const group = id % centers.length;
+      const center = centers[group];
+      const spread = spreads[group];
+      points.push({
+        id,
+        cluster: -1,
+        position: [
+          center[0] + gaussian(random) * spread,
+          center[1] + gaussian(random) * spread * 0.82,
+          center[2] + gaussian(random) * spread * 1.08,
+        ],
+      });
+    }
+  } else if (dataset === "anisotropic") {
+    const centers: Vec3[] = [[-9, -5, -9], [7, 6, -2], [2, -6, 10]];
+    for (let id = 0; id < count; id += 1) {
+      const group = id % centers.length;
+      const center = centers[group];
+      const a = gaussian(random);
+      const b = gaussian(random);
+      const c = gaussian(random);
+      const transforms = [
+        [4.5 * a + 0.5 * b, 1.45 * a + 0.9 * c, 2.5 * a + 0.65 * b],
+        [-2.6 * a + 0.7 * c, 3.8 * a + 0.55 * b, 2.15 * a + b],
+        [3.4 * a + 0.65 * b, -1.8 * a + 0.7 * c, -3.7 * a + 0.55 * b],
+      ][group];
+      points.push({
+        id,
+        cluster: -1,
+        position: [center[0] + transforms[0], center[1] + transforms[1], center[2] + transforms[2]],
+      });
+    }
   } else if (dataset === "overlap") {
-    const centers: Vec3[] = [[-4, 1.5, -3], [3, -1, 0], [0, 2, 4]];
+    const centers: Vec3[] = [[-7, -3, -6], [6, -2, 1], [-1, 5, 7]];
     for (let id = 0; id < count; id += 1) {
       const group = id % centers.length;
       const center = centers[group];
@@ -136,8 +191,30 @@ function makePoints(dataset: DatasetId, requestedCount: number, seed: number): P
         ],
       });
     }
+  } else if (dataset === "moons") {
+    for (let id = 0; id < count; id += 1) {
+      const group = id % 2;
+      const angle = random() * Math.PI;
+      const jitter = () => gaussian(random) * 0.48;
+      const baseX = group === 0 ? Math.cos(angle) * 8 - 3 : (1 - Math.cos(angle)) * 8 - 3;
+      const baseY = group === 0 ? Math.sin(angle) * 6 - 3 : 3 - Math.sin(angle) * 6;
+      const baseZ = (angle - Math.PI / 2) * (group === 0 ? 2.2 : -2.2);
+      points.push({
+        id,
+        cluster: -1,
+        position: [baseX + jitter(), baseY + jitter(), baseZ + jitter() * 1.6],
+      });
+    }
+  } else if (dataset === "noise") {
+    for (let id = 0; id < count; id += 1) {
+      points.push({
+        id,
+        cluster: -1,
+        position: [(random() - 0.5) * 29, (random() - 0.5) * 21, (random() - 0.5) * 29],
+      });
+    }
   } else {
-    const radii = [4.2, 8.2, 11.7];
+    const radii = [5.2, 10.1, 15.1];
     for (let id = 0; id < count; id += 1) {
       const radius = radii[id % radii.length] + gaussian(random) * 0.35;
       const theta = random() * Math.PI * 2;
@@ -491,31 +568,91 @@ function ClusterEnvelope({ members, centroid, index }: {
   centroid: Vec3;
   index: number;
 }) {
-  const usesHull = members.length >= 6;
-  const radius = useMemo(() => {
-    if (members.length === 0) return 1.35;
-    return Math.max(
-      1.35,
-      ...members.map((point) => Math.sqrt(distanceSquared(point.position, centroid))),
-    ) + 0.45;
-  }, [centroid, members]);
-  const geometry = useMemo(() => {
-    if (usesHull) {
-      return new ConvexGeometry(members.map((point) => new THREE.Vector3(...point.position)));
+  const mesh = useRef<THREE.Mesh>(null);
+  const geometry = useMemo(() => new THREE.SphereGeometry(1, 48, 32), []);
+  const fit = useMemo(() => {
+    if (members.length < 3) {
+      return {
+        position: new THREE.Vector3(...centroid),
+        scale: new THREE.Vector3(1.5, 1.5, 1.5),
+        quaternion: new THREE.Quaternion(),
+      };
     }
-    return new THREE.SphereGeometry(1, 28, 18);
-  }, [members, usesHull]);
+
+    const covariance = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    members.forEach((point) => {
+      const delta = point.position.map((value, axis) => value - centroid[axis]) as Vec3;
+      for (let row = 0; row < 3; row += 1) {
+        for (let column = 0; column < 3; column += 1) {
+          covariance[row][column] += delta[row] * delta[column] / members.length;
+        }
+      }
+    });
+
+    const eigenvectors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    for (let iteration = 0; iteration < 14; iteration += 1) {
+      const pairs: [number, number][] = [[0, 1], [0, 2], [1, 2]];
+      const [p, q] = pairs.reduce((best, pair) => (
+        Math.abs(covariance[pair[0]][pair[1]]) > Math.abs(covariance[best[0]][best[1]]) ? pair : best
+      ));
+      if (Math.abs(covariance[p][q]) < 1e-8) break;
+      const angle = 0.5 * Math.atan2(2 * covariance[p][q], covariance[q][q] - covariance[p][p]);
+      const cosine = Math.cos(angle);
+      const sine = Math.sin(angle);
+      const pp = covariance[p][p];
+      const qq = covariance[q][q];
+      const pq = covariance[p][q];
+      for (let axis = 0; axis < 3; axis += 1) {
+        if (axis === p || axis === q) continue;
+        const ap = covariance[axis][p];
+        const aq = covariance[axis][q];
+        covariance[axis][p] = covariance[p][axis] = cosine * ap - sine * aq;
+        covariance[axis][q] = covariance[q][axis] = sine * ap + cosine * aq;
+      }
+      covariance[p][p] = cosine * cosine * pp - 2 * sine * cosine * pq + sine * sine * qq;
+      covariance[q][q] = sine * sine * pp + 2 * sine * cosine * pq + cosine * cosine * qq;
+      covariance[p][q] = covariance[q][p] = 0;
+      for (let axis = 0; axis < 3; axis += 1) {
+        const vp = eigenvectors[axis][p];
+        const vq = eigenvectors[axis][q];
+        eigenvectors[axis][p] = cosine * vp - sine * vq;
+        eigenvectors[axis][q] = sine * vp + cosine * vq;
+      }
+    }
+
+    const order = [0, 1, 2].sort((a, b) => covariance[b][b] - covariance[a][a]);
+    const axes = order.map((column) => new THREE.Vector3(
+      eigenvectors[0][column], eigenvectors[1][column], eigenvectors[2][column],
+    ).normalize());
+    if (new THREE.Vector3().crossVectors(axes[0], axes[1]).dot(axes[2]) < 0) axes[2].negate();
+    const basis = new THREE.Matrix4().makeBasis(axes[0], axes[1], axes[2]);
+    const radii = order.map((axis) => THREE.MathUtils.clamp(Math.sqrt(Math.max(covariance[axis][axis], 0)) * 2.45 + 0.85, 1.5, 16));
+    return {
+      position: new THREE.Vector3(...centroid),
+      scale: new THREE.Vector3(radii[0], radii[1], radii[2]),
+      quaternion: new THREE.Quaternion().setFromRotationMatrix(basis),
+    };
+  }, [centroid, members]);
   const uniforms = useMemo(() => ({
     uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) },
   }), [index]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
+  useFrame((_, delta) => {
+    if (!mesh.current) return;
+    const damping = 1 - Math.exp(-delta * 4.2);
+    mesh.current.position.lerp(fit.position, damping);
+    mesh.current.scale.lerp(fit.scale, damping);
+    mesh.current.quaternion.slerp(fit.quaternion, damping);
+  });
 
   return (
     <mesh
+      ref={mesh}
       geometry={geometry}
-      position={usesHull ? [0, 0, 0] : centroid}
-      scale={usesHull ? [1.06, 1.06, 1.06] : [radius, radius, radius]}
+      position={fit.position}
+      scale={fit.scale}
+      quaternion={fit.quaternion}
       raycast={() => null}
       renderOrder={-1}
     >
@@ -579,19 +716,19 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
           </div>
         </Html>
       )}
-      <gridHelper args={[42, 21, "#43515f", "#24313d"]} position={[0, -7.5, 0]} />
-      <axesHelper args={[12]} position={[0, -7.45, 0]} />
-      <Html position={[12.6, -7.35, 0]}><span className="axis-label">X</span></Html>
+      <gridHelper args={[58, 29, "#43515f", "#24313d"]} position={[0, -11.5, 0]} />
+      <axesHelper args={[16]} position={[0, -11.45, 0]} />
+      <Html position={[16.6, -11.35, 0]}><span className="axis-label">X</span></Html>
       <Html position={[0, 5.3, 0]}><span className="axis-label">Y</span></Html>
-      <Html position={[0, -7.35, 12.6]}><span className="axis-label">Z</span></Html>
+      <Html position={[0, -11.35, 16.6]}><span className="axis-label">Z</span></Html>
       <OrbitControls
         makeDefault
         enableDamping
         dampingFactor={0.08}
         autoRotate={autoRotate}
         autoRotateSpeed={0.42}
-        minDistance={16}
-        maxDistance={48}
+        minDistance={18}
+        maxDistance={62}
         target={[0, 0, 0]}
       />
     </>
@@ -614,13 +751,13 @@ function formatMetric(value: number) {
 }
 
 export default function KMeansLab() {
-  const [config, setConfig] = useState<Config>({ dataset: "gaussian", strategy: "plusplus", k: 4, pointCount: 180 });
+  const [config, setConfig] = useState<Config>({ dataset: "gaussian", strategy: "plusplus", k: 4, pointCount: 320 });
   const [seed, setSeed] = useState(1207);
   const [model, setModel] = useState<Model>(() => createModel(config, seed));
   const [runId, setRunId] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
-  const [showLinks, setShowLinks] = useState(false);
+  const [showLinks, setShowLinks] = useState(true);
   const [showVolumes, setShowVolumes] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
 
@@ -687,7 +824,7 @@ export default function KMeansLab() {
     <main className="lab-shell">
       <div className="scene-layer" aria-label="Interactive three-dimensional K-means visualization">
         <Canvas
-          camera={{ position: [22, 17, 25], fov: 48, near: 0.1, far: 120 }}
+          camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
           dpr={[1, 1.75]}
           gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
           onPointerMissed={() => setHovered(null)}
@@ -747,9 +884,9 @@ export default function KMeansLab() {
           <span><b>Observations</b><strong>{model.points.length}</strong></span>
           <input
             type="range"
-            min="90"
-            max="300"
-            step="30"
+            min="160"
+            max="600"
+            step="40"
             value={config.pointCount}
             disabled={config.dataset === "classic"}
             onChange={(event) => changeConfig("pointCount", Number(event.target.value))}
