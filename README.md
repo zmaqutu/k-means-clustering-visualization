@@ -1,7 +1,7 @@
-<h1 align="center">K-Means 3D Lab</h1>
+<h1 align="center">Clustering 3D Lab</h1>
 
 <p align="center">
-  An interactive, step-by-step 3D visualization of the K-means clustering algorithm.
+  An interactive, step-by-step 3D laboratory for centroid, medoid, density, and probabilistic clustering.
 </p>
 
 <div align="center">
@@ -21,9 +21,9 @@
 
 ## Live demo
 
-Explore the production version at **[k-means-3d-lab.zmaqutu.chatgpt.site](https://k-means-3d-lab.zmaqutu.chatgpt.site)**.
+Explore the production version at **[zmaqutu.github.io/k-means-clustering-visualization/](https://zmaqutu.github.io/k-means-clustering-visualization/)**.
 
-K-Means 3D Lab turns the alternating assignment and centroid-update phases of K-means into a spatial experiment. Run the algorithm automatically, advance one operation at a time, choose the initial centroids, inspect observations, and deliberately test the algorithm on datasets it handles poorly.
+Clustering 3D Lab turns four foundational clustering methods into a spatial experiment. Compare their assumptions on the same datasets, run an algorithm automatically, advance it one operation at a time, inspect observations, and deliberately test each method on geometry it handles poorly.
 
 <p align="center">
   <img src="./readmeAssets/interactive-lab.png" width="100%" alt="Interactive K-Means 3D Lab showing a converged double-helix dataset, controls, cluster hulls, and live diagnostics" />
@@ -31,7 +31,8 @@ K-Means 3D Lab turns the alternating assignment and centroid-update phases of K-
 
 ## Highlights
 
-- **Step-by-step playback** — alternate between assigning observations and moving centroids to their cluster means.
+- **Four real clustering engines** — switch between K-means, K-medoids, DBSCAN, and a spherical Gaussian mixture model.
+- **Step-by-step playback** — inspect assignments and parameter updates instead of jumping directly to the final partition.
 - **Automatic convergence** — play every operation until assignments and centroid positions settle.
 - **Three initialization strategies** — compare random, K-means++, and farthest-point seeding.
 - **Manual centroid placement** — click observations in the scene to create the starting configuration you want.
@@ -40,19 +41,28 @@ K-Means 3D Lab turns the alternating assignment and centroid-update phases of K-
 - **Cluster-wide 3D hulls** — translucent envelopes reveal the full spatial extent of each assigned group.
 - **Point inspection** — pin an observation to read its coordinates, assignment, and distance from its centroid.
 - **Cluster isolation** — click a cluster in the diagnostics panel or press `1`–`6` to focus on it.
-- **Live diagnostics** — follow inertia, moved observations, maximum centroid shift, cluster sizes, and iteration count.
+- **Algorithm-aware diagnostics** — follow inertia, medoid cost, negative log-likelihood, density noise, moved observations, representative shift, cluster sizes, and iteration count.
 - **Scene controls** — toggle hulls, distance lines, and automatic orbiting independently.
 - **Playback tempo** — choose Observe, Flow, or Turbo speed without changing the algorithm.
 - **Fresh experiments** — reset an initialization, generate a new sample, or launch a surprise dataset.
 
-## How K-means is visualized
+## Algorithms
 
-1. **Initialize centroids** using random selection, K-means++, farthest-point selection, or manual placement.
-2. **Assign every observation** to the centroid with the smallest squared Euclidean distance.
-3. **Update each centroid** to the mean position of its assigned observations.
-4. **Repeat** until assignments and centroid positions no longer change.
+| Algorithm | Model | What the lab exposes |
+| --- | --- | --- |
+| **K-means** | Nearest-centroid partitions with arithmetic means | Assignment and centroid-update phases, inertia, and centroid movement. |
+| **K-medoids** | Nearest-representative partitions using real observations | Medoid selection, total distance cost, and improved resistance to outliers. |
+| **DBSCAN** | Density-connected regions with explicit noise | Adjustable neighbourhood radius (`ε`), minimum density, discovered cluster count, and noise observations. |
+| **Gaussian mixture model** | Spherical Gaussian components with soft memberships | Expectation/maximization phases, component means and variances, negative log-likelihood, and posterior membership confidence. |
 
-The interface deliberately separates assignment and update into individual operations. This makes it possible to see *why* the algorithm converges rather than only viewing the final partition.
+## How the lab is visualized
+
+1. **Choose an algorithm and dataset** to put different clustering assumptions against the same 3D geometry.
+2. **Tune the model** with K and an initialization strategy, or DBSCAN's neighbourhood radius and minimum density.
+3. **Advance one operation at a time** or run automatically until the selected model completes.
+4. **Inspect the result** through spatial hulls, per-cluster counts, objective metrics, noise labels, and point-level details.
+
+K-means and K-medoids deliberately separate assignment from representative updates. The Gaussian mixture model separates its expectation and maximization phases. DBSCAN completes a density expansion in one scan, revealing both connected regions and observations classified as noise. This makes it possible to see *why* each algorithm reaches its result rather than only viewing a final partition.
 
 ## Dataset laboratory
 
@@ -83,7 +93,7 @@ The curated **Clean split**, **Break it**, and **Stress test** shortcuts provide
 | Click an observation | Pin and inspect it |
 | `Space` | Advance one algorithm operation |
 | `A` | Start or pause automatic playback |
-| `R` | Reset with a fresh centroid initialization |
+| `R` | Reset with a fresh initialization |
 | `1`–`6` | Isolate the corresponding cluster |
 | `Esc` | Clear the pinned point and cluster focus |
 
@@ -93,7 +103,7 @@ The curated **Clean split**, **Break it**, and **Stress test** shortcuts provide
 - **TypeScript** for the dataset, clustering, and scene contracts.
 - **Three.js** for geometry, materials, lighting, convex hulls, and the 3D coordinate space.
 - **React Three Fiber** for rendering the Three.js scene through React.
-- **Drei** for camera controls, HTML scene labels, and centroid motion trails.
+- **Drei** for camera controls and HTML scene labels.
 - **Tailwind CSS / PostCSS** as part of the styling toolchain, with the product UI authored in custom CSS.
 - **Vite + Vinext** for development, production builds, and the React Server Components-compatible runtime.
 - **OpenAI Sites / Cloudflare Workers** for the hosted production build.
@@ -175,7 +185,7 @@ Useful contribution areas include new educational datasets, accessible interacti
 - Timeline scrubbing to revisit earlier assignments and centroid positions.
 - Side-by-side runs for comparing initialization strategies.
 - Exportable experiment snapshots and shareable configurations.
-- Additional clustering algorithms such as K-medoids, DBSCAN, and Gaussian mixture models.
+- Per-algorithm parameter presets for each dataset.
 - Optional animated walkthrough recordings for each failure-case dataset.
 
 <p align="center">Made with care in React, TypeScript, and Three.js.</p>

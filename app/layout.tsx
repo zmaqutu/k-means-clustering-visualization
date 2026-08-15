@@ -18,8 +18,8 @@ export async function generateMetadata(): Promise<Metadata> {
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
   const baseUrl = new URL(`${protocol}://${host}`);
-  const title = "K-Means 3D Lab";
-  const description = "An interactive Three.js visualization for learning how K-means clustering assigns points, moves centroids, and converges.";
+  const title = "Clustering 3D Lab";
+  const description = "An interactive Three.js laboratory for exploring K-means, K-medoids, DBSCAN, and Gaussian mixture clustering in three dimensions.";
 
   return {
     metadataBase: baseUrl,
@@ -29,7 +29,7 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: "/og.png", width: 1536, height: 1024, alt: "K-Means 3D Lab cluster visualization" }],
+      images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Clustering 3D Lab visualization" }],
     },
     twitter: {
       card: "summary_large_image",

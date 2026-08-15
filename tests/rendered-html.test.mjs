@@ -15,14 +15,14 @@ async function render() {
   );
 }
 
-test("server-renders the K-means lab shell and share metadata", async () => {
+test("server-renders the clustering lab shell and share metadata", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>K-Means 3D Lab<\/title>/i);
-  assert.match(html, /interactive Three\.js visualization/i);
+  assert.match(html, /<title>Clustering 3D Lab<\/title>/i);
+  assert.match(html, /interactive Three\.js laboratory/i);
   assert.match(html, /property="og:image"/i);
   assert.match(html, /content="https:\/\/kmeans\.example\/og\.png"/i);
   assert.match(html, /name="twitter:card"/i);

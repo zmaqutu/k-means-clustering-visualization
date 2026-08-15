@@ -1,6 +1,6 @@
 "use client";
 
-import { Html, OrbitControls, Trail } from "@react-three/drei";
+import { Html, OrbitControls } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -10,6 +10,7 @@ import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js"
 type Vec3 = [number, number, number];
 type DatasetId = "showcase" | "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "helix" | "bridge" | "lattice" | "shells" | "outliers" | "noise";
 type Strategy = "random" | "plusplus" | "farthest";
+type AlgorithmId = "kmeans" | "kmedoids" | "dbscan" | "gmm";
 type Phase = "ready" | "assigned" | "updated" | "converged";
 type PlaybackSpeed = "observe" | "normal" | "turbo";
 
@@ -20,10 +21,13 @@ type PointDatum = {
 };
 
 type Config = {
+  algorithm: AlgorithmId;
   dataset: DatasetId;
   strategy: Strategy;
   k: number;
   pointCount: number;
+  epsilon: number;
+  minPoints: number;
 };
 
 type Model = {
@@ -34,11 +38,16 @@ type Model = {
   moved: number;
   maxShift: number;
   inertia: number;
+  variances: number[];
+  weights: number[];
+  responsibilities: number[][];
   events: string[];
 };
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
 const NEUTRAL_COLOR = "#76e4f7";
+const NOISE_COLOR = "#64748b";
+const getClusterColor = (index: number) => CLUSTER_COLORS[index % CLUSTER_COLORS.length];
 const PHI = (1 + Math.sqrt(5)) / 2;
 const CLUSTER_HALO_DIRECTIONS = [
   [0, -1, -PHI], [0, -1, PHI], [0, 1, -PHI], [0, 1, PHI],
@@ -150,6 +159,29 @@ const STRATEGIES: Record<Strategy, { label: string; detail: string }> = {
   farthest: { label: "Farthest", detail: "Always choose the most distant point." },
 };
 
+const ALGORITHMS: Record<AlgorithmId, { label: string; short: string; description: string }> = {
+  kmeans: {
+    label: "K-means",
+    short: "Fast centroid partitions",
+    description: "Assign points to the nearest mean, then move each mean until the geometry settles.",
+  },
+  kmedoids: {
+    label: "K-medoids",
+    short: "Robust point representatives",
+    description: "Represent each cluster with a real observation, reducing the pull of extreme outliers.",
+  },
+  dbscan: {
+    label: "DBSCAN",
+    short: "Density and noise discovery",
+    description: "Grow clusters from dense neighbourhoods and leave isolated observations explicitly marked as noise.",
+  },
+  gmm: {
+    label: "Gaussian mixture",
+    short: "Soft probabilistic clusters",
+    description: "Alternate expectation and maximization to estimate spherical Gaussian components and membership confidence.",
+  },
+};
+
 const PLAYBACK_SPEEDS: Record<PlaybackSpeed, { label: string; delay: number }> = {
   observe: { label: "Observe", delay: 1250 },
   normal: { label: "Flow", delay: 760 },
@@ -184,8 +216,10 @@ function distanceSquared(a: Vec3, b: Vec3) {
   return dx * dx + dy * dy + dz * dz;
 }
 
-function displayedCluster(point: PointDatum) {
-  return point.cluster;
+function pointPaletteIndex(point: PointDatum) {
+  if (point.cluster === -1) return 0;
+  if (point.cluster === -2) return 1;
+  return 2 + (point.cluster % CLUSTER_COLORS.length);
 }
 
 function makePoints(dataset: DatasetId, requestedCount: number, seed: number): PointDatum[] {
@@ -463,9 +497,117 @@ function calculateInertia(points: PointDatum[], centroids: Vec3[]) {
   ), 0);
 }
 
+function calculateMedoidCost(points: PointDatum[], medoids: Vec3[]) {
+  return points.reduce((sum, point) => (
+    point.cluster >= 0 ? sum + Math.sqrt(distanceSquared(point.position, medoids[point.cluster])) : sum
+  ), 0);
+}
+
+function assignToNearest(points: PointDatum[], representatives: Vec3[]) {
+  let moved = 0;
+  const assigned = points.map((point) => {
+    let nearest = 0;
+    let nearestDistance = Infinity;
+    representatives.forEach((representative, index) => {
+      const distance = distanceSquared(point.position, representative);
+      if (distance < nearestDistance) {
+        nearest = index;
+        nearestDistance = distance;
+      }
+    });
+    if (point.cluster !== nearest) moved += 1;
+    return { ...point, cluster: nearest };
+  });
+  return { points: assigned, moved };
+}
+
+function runDbscan(points: PointDatum[], epsilon: number, minPoints: number) {
+  const epsilonSquared = epsilon * epsilon;
+  const labels = Array(points.length).fill(-1);
+  const visited = Array(points.length).fill(false);
+  const neighbours = (index: number) => {
+    const nearby: number[] = [];
+    points.forEach((candidate, candidateIndex) => {
+      if (distanceSquared(points[index].position, candidate.position) <= epsilonSquared) nearby.push(candidateIndex);
+    });
+    return nearby;
+  };
+
+  let clusterCount = 0;
+  for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+    if (visited[pointIndex]) continue;
+    visited[pointIndex] = true;
+    const nearby = neighbours(pointIndex);
+    if (nearby.length < minPoints) {
+      labels[pointIndex] = -2;
+      continue;
+    }
+
+    labels[pointIndex] = clusterCount;
+    const queue = [...nearby];
+    const queued = new Set(queue);
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const candidateIndex = queue[cursor];
+      if (!visited[candidateIndex]) {
+        visited[candidateIndex] = true;
+        const candidateNeighbours = neighbours(candidateIndex);
+        if (candidateNeighbours.length >= minPoints) {
+          candidateNeighbours.forEach((neighbourIndex) => {
+            if (!queued.has(neighbourIndex)) {
+              queued.add(neighbourIndex);
+              queue.push(neighbourIndex);
+            }
+          });
+        }
+      }
+      if (labels[candidateIndex] < 0) labels[candidateIndex] = clusterCount;
+    }
+    clusterCount += 1;
+  }
+
+  const assigned = points.map((point, index) => ({ ...point, cluster: labels[index] }));
+  const centroids = Array.from({ length: clusterCount }, (_, cluster) => {
+    const members = assigned.filter((point) => point.cluster === cluster);
+    return members.reduce<Vec3>((sum, point) => [
+      sum[0] + point.position[0] / members.length,
+      sum[1] + point.position[1] / members.length,
+      sum[2] + point.position[2] / members.length,
+    ], [0, 0, 0]);
+  });
+  return { points: assigned, centroids, clusterCount };
+}
+
+function expectationStep(model: Model) {
+  let negativeLogLikelihood = 0;
+  let moved = 0;
+  const responsibilities = model.points.map((point) => {
+    const logScores = model.centroids.map((centroid, index) => {
+      const variance = Math.max(model.variances[index], 0.25);
+      return Math.log(Math.max(model.weights[index], 1e-8))
+        - 1.5 * Math.log(2 * Math.PI * variance)
+        - distanceSquared(point.position, centroid) / (2 * variance);
+    });
+    const maxScore = Math.max(...logScores);
+    const exponentials = logScores.map((score) => Math.exp(score - maxScore));
+    const total = exponentials.reduce((sum, score) => sum + score, 0);
+    negativeLogLikelihood -= maxScore + Math.log(Math.max(total, 1e-12));
+    return exponentials.map((score) => score / Math.max(total, 1e-12));
+  });
+  const points = model.points.map((point, pointIndex) => {
+    const cluster = responsibilities[pointIndex].reduce((best, probability, index, values) => (
+      probability > values[best] ? index : best
+    ), 0);
+    if (point.cluster !== cluster) moved += 1;
+    return { ...point, cluster };
+  });
+  return { points, responsibilities, moved, negativeLogLikelihood };
+}
+
 function createModel(config: Config, dataSeed: number, initializationSeed = dataSeed): Model {
   const points = makePoints(config.dataset, config.pointCount, dataSeed);
-  const centroids = initializeCentroids(points, config.k, config.strategy, initializationSeed);
+  const centroids = config.algorithm === "dbscan"
+    ? []
+    : initializeCentroids(points, config.k, config.strategy, initializationSeed);
   return {
     points,
     centroids,
@@ -474,62 +616,143 @@ function createModel(config: Config, dataSeed: number, initializationSeed = data
     moved: 0,
     maxShift: 0,
     inertia: 0,
-    events: ["Centroids initialized"],
+    variances: centroids.map(() => 16),
+    weights: centroids.map(() => 1 / Math.max(centroids.length, 1)),
+    responsibilities: [],
+    events: [config.algorithm === "dbscan" ? "Density field ready" : "Representatives initialized"],
   };
 }
 
-function advanceModel(model: Model): Model {
+function advanceModel(model: Model, config: Config): Model {
   if (model.phase === "converged") return model;
 
+  if (config.algorithm === "dbscan") {
+    const result = runDbscan(model.points, config.epsilon, config.minPoints);
+    const noiseCount = result.points.filter((point) => point.cluster === -2).length;
+    const moved = result.points.filter((point, index) => point.cluster !== model.points[index].cluster).length;
+    return {
+      ...model,
+      ...result,
+      phase: "converged",
+      iteration: 1,
+      moved,
+      maxShift: 0,
+      inertia: noiseCount,
+      events: [...model.events, `${result.clusterCount} density clusters · ${noiseCount} noise points`],
+    };
+  }
+
+  if (config.algorithm === "gmm" && (model.phase === "ready" || model.phase === "updated")) {
+    const expectation = expectationStep(model);
+    return {
+      ...model,
+      points: expectation.points,
+      responsibilities: expectation.responsibilities,
+      moved: expectation.moved,
+      inertia: expectation.negativeLogLikelihood,
+      phase: "assigned",
+      events: [...model.events, `Membership probabilities estimated · ${expectation.moved} labels changed`],
+    };
+  }
+
   if (model.phase === "ready" || model.phase === "updated") {
-    let moved = 0;
-    const points = model.points.map((point) => {
-      let nearest = 0;
-      let nearestDistance = Infinity;
-      model.centroids.forEach((centroid, index) => {
-        const distance = distanceSquared(point.position, centroid);
-        if (distance < nearestDistance) {
-          nearest = index;
-          nearestDistance = distance;
-        }
-      });
-      if (point.cluster !== nearest) moved += 1;
-      return { ...point, cluster: nearest };
-    });
+    const assignment = assignToNearest(model.points, model.centroids);
+    const points = assignment.points;
+    const moved = assignment.moved;
     const converged = model.iteration > 0 && moved === 0;
     return {
       ...model,
       points,
       moved,
-      inertia: calculateInertia(points, model.centroids),
+      inertia: config.algorithm === "kmedoids"
+        ? calculateMedoidCost(points, model.centroids)
+        : calculateInertia(points, model.centroids),
       phase: converged ? "converged" : "assigned",
       events: [...model.events, converged ? "Assignments unchanged · converged" : `${moved} assignments changed`],
     };
   }
 
-  const sums = model.centroids.map(() => [0, 0, 0, 0]);
-  model.points.forEach((point) => {
-    const sum = sums[point.cluster];
-    sum[0] += point.position[0];
-    sum[1] += point.position[1];
-    sum[2] += point.position[2];
-    sum[3] += 1;
-  });
-  const centroids = model.centroids.map((centroid, index) => {
-    const [x, y, z, count] = sums[index];
-    return count > 0 ? [x / count, y / count, z / count] as Vec3 : [...centroid] as Vec3;
-  });
+  if (config.algorithm === "gmm") {
+    const componentMasses = model.centroids.map((_, cluster) => (
+      model.responsibilities.reduce((sum, row) => sum + row[cluster], 0)
+    ));
+    const centroids = model.centroids.map((centroid, cluster) => {
+      const mass = componentMasses[cluster];
+      if (mass <= 1e-8) return [...centroid] as Vec3;
+      return model.points.reduce<Vec3>((sum, point, pointIndex) => {
+        const share = model.responsibilities[pointIndex][cluster] / mass;
+        return [
+          sum[0] + point.position[0] * share,
+          sum[1] + point.position[1] * share,
+          sum[2] + point.position[2] * share,
+        ];
+      }, [0, 0, 0]);
+    });
+    const variances = centroids.map((centroid, cluster) => {
+      const mass = componentMasses[cluster];
+      if (mass <= 1e-8) return model.variances[cluster];
+      const weightedDistance = model.points.reduce((sum, point, pointIndex) => (
+        sum + model.responsibilities[pointIndex][cluster] * distanceSquared(point.position, centroid)
+      ), 0);
+      return Math.max(weightedDistance / (3 * mass), 0.25);
+    });
+    const weights = componentMasses.map((mass) => Math.max(mass / model.points.length, 1e-8));
+    const shifts = centroids.map((centroid, index) => Math.sqrt(distanceSquared(centroid, model.centroids[index])));
+    const maxShift = Math.max(...shifts);
+    const converged = maxShift < 0.01;
+    return {
+      ...model,
+      centroids,
+      variances,
+      weights,
+      iteration: model.iteration + 1,
+      maxShift,
+      phase: converged ? "converged" : "updated",
+      events: [...model.events, converged ? "Gaussian components stabilized" : `Component means moved up to ${maxShift.toFixed(2)} units`],
+    };
+  }
+
+  const centroids = config.algorithm === "kmedoids"
+    ? model.centroids.map((medoid, cluster) => {
+      const members = model.points.filter((point) => point.cluster === cluster);
+      if (members.length === 0) return [...medoid] as Vec3;
+      let best = members[0];
+      let bestCost = Infinity;
+      members.forEach((candidate) => {
+        const cost = members.reduce((sum, member) => (
+          sum + Math.sqrt(distanceSquared(candidate.position, member.position))
+        ), 0);
+        if (cost < bestCost) {
+          best = candidate;
+          bestCost = cost;
+        }
+      });
+      return [...best.position] as Vec3;
+    })
+    : model.centroids.map((centroid, index) => {
+      const members = model.points.filter((point) => point.cluster === index);
+      if (members.length === 0) return [...centroid] as Vec3;
+      return members.reduce<Vec3>((sum, point) => [
+        sum[0] + point.position[0] / members.length,
+        sum[1] + point.position[1] / members.length,
+        sum[2] + point.position[2] / members.length,
+      ], [0, 0, 0]);
+    });
   const shifts = centroids.map((centroid, index) => Math.sqrt(distanceSquared(centroid, model.centroids[index])));
   const maxShift = Math.max(...shifts);
-  const converged = maxShift <= Number.EPSILON;
+  const converged = maxShift < 0.001;
   return {
     ...model,
     centroids,
     iteration: model.iteration + 1,
     maxShift,
-    inertia: calculateInertia(model.points, centroids),
+    inertia: config.algorithm === "kmedoids"
+      ? calculateMedoidCost(model.points, centroids)
+      : calculateInertia(model.points, centroids),
     phase: converged ? "converged" : "updated",
-    events: [...model.events, converged ? "Centroids stationary · converged" : `Centroids moved up to ${maxShift.toFixed(2)} units`],
+    events: [...model.events, converged
+      ? `${config.algorithm === "kmedoids" ? "Medoids" : "Centroids"} stationary · converged`
+      : `${config.algorithm === "kmedoids" ? "Medoids" : "Centroids"} moved up to ${maxShift.toFixed(2)} units`],
   };
 }
 
@@ -553,7 +776,7 @@ function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSele
     toneMapped: false,
     blending: THREE.AdditiveBlending,
   }), []);
-  const materials = useMemo(() => [NEUTRAL_COLOR, ...CLUSTER_COLORS].map((color, paletteIndex) => new THREE.MeshStandardMaterial({
+  const materials = useMemo(() => [NEUTRAL_COLOR, NOISE_COLOR, ...CLUSTER_COLORS].map((color, paletteIndex) => new THREE.MeshStandardMaterial({
     color,
     emissive: color,
     emissiveIntensity: paletteIndex === 0 ? 2.2 : 0.82,
@@ -561,7 +784,7 @@ function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSele
     metalness: paletteIndex === 0 ? 0.02 : 0.08,
     toneMapped: false,
   })), []);
-  const neutralPoints = useMemo(() => points.filter((point) => point.cluster < 0), [points]);
+  const neutralPoints = useMemo(() => points.filter((point) => point.cluster === -1), [points]);
   const neutralGlow = useMemo(() => new THREE.InstancedMesh(
     glowGeometry,
     glowMaterial,
@@ -571,8 +794,7 @@ function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSele
   const batches = useMemo(() => {
     const groups = Array.from({ length: materials.length }, () => [] as PointDatum[]);
     points.forEach((point) => {
-      const cluster = displayedCluster(point);
-      groups[cluster + 1].push(point);
+      groups[pointPaletteIndex(point)].push(point);
     });
 
     return groups.map((group, paletteIndex) => {
@@ -591,7 +813,7 @@ function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSele
           ? 1.95
           : point.id === hovered
             ? 1.58
-            : point.cluster < 0
+            : point.cluster === -1
               ? 1.14
               : 1.06;
         dummy.scale.setScalar(isDimmed ? scale * 0.24 : scale);
@@ -653,10 +875,11 @@ function PointCloud({ points, hovered, selected, focusedCluster, onHover, onSele
   );
 }
 
-function AnimatedCentroid({ position, index }: { position: Vec3; index: number }) {
+function AnimatedCentroid({ position, index, label = "C" }: { position: Vec3; index: number; label?: string }) {
   const group = useRef<THREE.Group>(null);
   const initialPosition = useRef<Vec3>([...position]);
   const target = useMemo(() => new THREE.Vector3(...position), [position]);
+  const color = getClusterColor(index);
 
   useFrame((_, delta) => {
     if (!group.current) return;
@@ -664,33 +887,19 @@ function AnimatedCentroid({ position, index }: { position: Vec3; index: number }
   });
 
   return (
-    <Trail
-      target={group}
-      width={2.2}
-      length={7}
-      decay={1}
-      stride={0.025}
-      interval={1}
-      local={false}
-      color={CLUSTER_COLORS[index]}
-      attenuation={(t) => t * t}
-    >
-      <group ref={group} position={initialPosition.current}>
-        <mesh raycast={() => null}>
-          <icosahedronGeometry args={[0.58, 1]} />
-          <meshBasicMaterial
-            color={CLUSTER_COLORS[index]}
-            toneMapped={false}
-          />
-        </mesh>
+    <group ref={group} position={initialPosition.current}>
+      <mesh raycast={() => null}>
+        <icosahedronGeometry args={[0.58, 1]} />
+        <meshBasicMaterial color={color} toneMapped={false} />
+      </mesh>
       <mesh scale={1.62} raycast={() => null}>
         <icosahedronGeometry args={[0.58, 1]} />
-        <meshBasicMaterial color={CLUSTER_COLORS[index]} wireframe transparent opacity={0.24} toneMapped={false} />
+        <meshBasicMaterial color={color} wireframe transparent opacity={0.24} toneMapped={false} />
       </mesh>
       <mesh scale={1.45} raycast={() => null}>
         <sphereGeometry args={[0.72, 16, 12]} />
         <meshBasicMaterial
-          color={CLUSTER_COLORS[index]}
+          color={color}
           transparent
           opacity={0.08}
           depthWrite={false}
@@ -699,12 +908,11 @@ function AnimatedCentroid({ position, index }: { position: Vec3; index: number }
         />
       </mesh>
       <Html position={[0, 1.45, 0]} center zIndexRange={[40, 0]}>
-        <div className="centroid-label" style={{ borderColor: `${CLUSTER_COLORS[index]}66` }}>
-          C{index + 1}
+        <div className="centroid-label" style={{ borderColor: `${color}66` }}>
+          {label}{index + 1}
         </div>
       </Html>
-      </group>
-    </Trail>
+    </group>
   );
 }
 
@@ -716,7 +924,7 @@ function ConnectionLines({ points, centroids, focusedCluster }: { points: PointD
       if (point.cluster < 0) return;
       if (focusedCluster !== null && point.cluster !== focusedCluster) return;
       positions.push(...point.position, ...centroids[point.cluster]);
-      const color = new THREE.Color(CLUSTER_COLORS[point.cluster]);
+      const color = new THREE.Color(getClusterColor(point.cluster));
       colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
     });
     const output = new THREE.BufferGeometry();
@@ -782,7 +990,7 @@ function ClusterShell({ members, index }: { members: PointDatum[]; index: number
     new THREE.ShaderMaterial({
       vertexShader: haloVertexShader,
       fragmentShader: haloFragmentShader,
-      uniforms: { uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) } },
+      uniforms: { uColor: { value: new THREE.Color(getClusterColor(index)) } },
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -810,7 +1018,8 @@ function ClusterShell({ members, index }: { members: PointDatum[]; index: number
   );
 }
 
-function Scene({ model, runId, hovered, selected, focusedCluster, showLinks, showVolumes, autoRotate, onHover, onSelect, onPlace }: {
+function Scene({ algorithm, model, runId, hovered, selected, focusedCluster, showLinks, showVolumes, autoRotate, onHover, onSelect, onPlace }: {
+  algorithm: AlgorithmId;
   model: Model;
   runId: number;
   hovered: number | null;
@@ -845,7 +1054,7 @@ function Scene({ model, runId, hovered, selected, focusedCluster, showLinks, sho
         onSelect={onSelect}
         onPlace={onPlace}
       />
-      {showLinks && model.phase !== "ready" && (
+      {showLinks && algorithm !== "dbscan" && model.phase !== "ready" && (
         <ConnectionLines points={model.points} centroids={model.centroids} focusedCluster={focusedCluster} />
       )}
       {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
@@ -857,14 +1066,19 @@ function Scene({ model, runId, hovered, selected, focusedCluster, showLinks, sho
         />
         ) : null
       ))}
-      {model.centroids.map((centroid, index) => (
-        <AnimatedCentroid key={`${runId}-${index}`} position={centroid} index={index} />
+      {algorithm !== "dbscan" && model.centroids.map((centroid, index) => (
+        <AnimatedCentroid
+          key={`${runId}-${index}`}
+          position={centroid}
+          index={index}
+          label={algorithm === "kmedoids" ? "M" : algorithm === "gmm" ? "G" : "C"}
+        />
       ))}
       {inspectedPoint && (
         <Html position={[inspectedPoint.position[0], inspectedPoint.position[1] + 0.9, inspectedPoint.position[2]]} center zIndexRange={[60, 0]}>
           <div className={`point-tooltip ${selectedPoint?.id === inspectedPoint.id ? "is-pinned" : ""}`}>
             <strong>Point {inspectedPoint.id + 1}</strong>
-            <span>{inspectedPoint.cluster < 0 ? "Unassigned" : `Cluster ${inspectedPoint.cluster + 1}`}</span>
+            <span>{inspectedPoint.cluster === -2 ? "Noise" : inspectedPoint.cluster < 0 ? "Unassigned" : `Cluster ${inspectedPoint.cluster + 1}`}</span>
           </div>
         </Html>
       )}
@@ -903,7 +1117,15 @@ function formatMetric(value: number) {
 }
 
 export default function KMeansLab() {
-  const [config, setConfig] = useState<Config>({ dataset: "helix", strategy: "plusplus", k: 2, pointCount: 360 });
+  const [config, setConfig] = useState<Config>({
+    algorithm: "kmeans",
+    dataset: "helix",
+    strategy: "plusplus",
+    k: 2,
+    pointCount: 360,
+    epsilon: 2.5,
+    minPoints: 6,
+  });
   const [seed, setSeed] = useState(1207);
   const [model, setModel] = useState<Model>(() => createModel(config, seed, 4921));
   const [runId, setRunId] = useState(0);
@@ -918,10 +1140,10 @@ export default function KMeansLab() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"controls" | "insights" | null>(null);
 
-  const readyToRun = model.centroids.length === config.k;
+  const readyToRun = config.algorithm === "dbscan" || model.centroids.length === config.k;
   const step = useCallback(() => setModel((current) => (
-    current.centroids.length === config.k ? advanceModel(current) : current
-  )), [config.k]);
+    config.algorithm === "dbscan" || current.centroids.length === config.k ? advanceModel(current, config) : current
+  )), [config]);
 
   useEffect(() => {
     if (!isPlaying || model.phase === "converged" || !readyToRun) {
@@ -979,6 +1201,10 @@ export default function KMeansLab() {
     rebuild({ ...config, [key]: value });
   };
 
+  const selectAlgorithm = (algorithm: AlgorithmId) => {
+    rebuild({ ...config, algorithm });
+  };
+
   const selectDataset = (dataset: DatasetId) => {
     rebuild({
       ...config,
@@ -1017,6 +1243,9 @@ export default function KMeansLab() {
       moved: 0,
       maxShift: 0,
       inertia: 0,
+      variances: [],
+      weights: [],
+      responsibilities: [],
       events: ["Manual centroid placement started"],
     }));
   };
@@ -1038,6 +1267,9 @@ export default function KMeansLab() {
       moved: 0,
       maxShift: 0,
       inertia: 0,
+      variances: centroids.map(() => 16),
+      weights: centroids.map(() => 1 / Math.max(centroids.length, 1)),
+      responsibilities: [],
       events: [...model.events, complete ? "All manual seeds placed · ready to run" : `Centroid ${centroids.length} placed manually`],
     });
   }, [config.k, isSeeding, model]);
@@ -1066,6 +1298,9 @@ export default function KMeansLab() {
       moved: 0,
       maxShift: 0,
       inertia: 0,
+      variances: nextCentroids.map(() => 16),
+      weights: nextCentroids.map(() => 1 / Math.max(nextCentroids.length, 1)),
+      responsibilities: [],
       events: [...(centroids.length === 0 ? [] : model.events), complete ? "All random seeds placed · ready to run" : `Centroid ${nextCentroids.length} placed randomly`],
     });
   };
@@ -1084,19 +1319,36 @@ export default function KMeansLab() {
   const selectedDistance = selectedPoint && selectedPoint.cluster >= 0
     ? Math.sqrt(distanceSquared(selectedPoint.position, model.centroids[selectedPoint.cluster]))
     : null;
-
-  const nextAction = model.phase === "assigned" ? "Update centroids" : "Assign points";
-  const status = !readyToRun
-    ? { kicker: "Centroid setup", title: `Place seed ${model.centroids.length + 1} of ${config.k}`, copy: "Click an observation to use its exact 3D position, or add a random seed from the controls." }
-    : model.phase === "converged"
-    ? { kicker: "System settled", title: "Convergence reached", copy: "Assignments and centroid positions are no longer changing." }
+  const selectedConfidence = selectedPoint?.cluster !== undefined && selectedPoint.cluster >= 0
+    ? model.responsibilities[selectedPoint.id]?.[selectedPoint.cluster] ?? null
+    : null;
+  const noiseCount = model.points.filter((point) => point.cluster === -2).length;
+  const nextAction = config.algorithm === "dbscan"
+    ? "Discover density clusters"
     : model.phase === "assigned"
-      ? { kicker: `Iteration ${model.iteration + 1} · Step 2`, title: "Move each centroid", copy: "Replace every centroid with the mean position of the points currently assigned to it." }
-      : { kicker: `Iteration ${model.iteration + 1} · Step 1`, title: "Assign every point", copy: "Measure Euclidean distance and give each observation to its nearest centroid." };
+      ? config.algorithm === "gmm" ? "Maximize components" : config.algorithm === "kmedoids" ? "Choose medoids" : "Update centroids"
+      : config.algorithm === "gmm" ? "Estimate memberships" : "Assign points";
+  const status = (() => {
+    if (!readyToRun) return { kicker: "Representative setup", title: `Place seed ${model.centroids.length + 1} of ${config.k}`, copy: "Click an observation to use its exact 3D position, or add a random seed from the controls." };
+    if (model.phase === "converged") {
+      if (config.algorithm === "dbscan") return { kicker: "Density scan complete", title: `${model.centroids.length} clusters discovered`, copy: `${noiseCount} observations did not belong to a dense region and remain marked as noise.` };
+      if (config.algorithm === "gmm") return { kicker: "Model stabilized", title: "Mixture converged", copy: "The Gaussian means, variances, weights, and soft memberships are no longer changing meaningfully." };
+      return { kicker: "System settled", title: "Convergence reached", copy: `${config.algorithm === "kmedoids" ? "Medoids" : "Assignments and centroid positions"} are no longer changing.` };
+    }
+    if (config.algorithm === "dbscan") return { kicker: "Density scan", title: "Discover connected density", copy: "Find core observations, expand through their neighbours, and separate sparse points as noise." };
+    if (config.algorithm === "gmm") return model.phase === "assigned"
+      ? { kicker: `Iteration ${model.iteration + 1} · M-step`, title: "Fit Gaussian components", copy: "Use soft membership weights to update every component mean, variance, and mixture weight." }
+      : { kicker: `Iteration ${model.iteration + 1} · E-step`, title: "Estimate memberships", copy: "Calculate how likely every observation is to belong to each Gaussian component." };
+    if (model.phase === "assigned") return config.algorithm === "kmedoids"
+      ? { kicker: `Iteration ${model.iteration + 1} · Step 2`, title: "Choose each medoid", copy: "Select the real observation with the lowest total distance to all members of its cluster." }
+      : { kicker: `Iteration ${model.iteration + 1} · Step 2`, title: "Move each centroid", copy: "Replace every centroid with the mean position of the points currently assigned to it." };
+    return { kicker: `Iteration ${model.iteration + 1} · Step 1`, title: "Assign every point", copy: `Give each observation to its nearest ${config.algorithm === "kmedoids" ? "medoid" : "centroid"}.` };
+  })();
+  const objectiveLabel = config.algorithm === "kmedoids" ? "Medoid cost" : config.algorithm === "gmm" ? "Neg. log L" : config.algorithm === "dbscan" ? "Noise points" : "Inertia";
 
   return (
     <main className={`lab-shell ${mobilePanel ? `is-mobile-${mobilePanel}-open` : ""}`}>
-      <div className={`scene-layer ${isSeeding ? "is-seeding" : ""}`} aria-label="Interactive three-dimensional K-means visualization">
+      <div className={`scene-layer ${isSeeding ? "is-seeding" : ""}`} aria-label={`Interactive three-dimensional ${ALGORITHMS[config.algorithm].label} visualization`}>
         <Canvas
           camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
           dpr={[1, 1.75]}
@@ -1107,6 +1359,7 @@ export default function KMeansLab() {
           }}
         >
           <Scene
+            algorithm={config.algorithm}
             model={model}
             runId={runId}
             hovered={hovered}
@@ -1153,16 +1406,32 @@ export default function KMeansLab() {
         </button>
       </nav>
 
-      <section id="kmeans-controls" className="control-panel" aria-label="K-means controls">
+      <section id="kmeans-controls" className="control-panel" aria-label="Clustering controls">
         <button type="button" className="mobile-panel-close" onClick={() => setMobilePanel(null)} aria-label="Close controls">×</button>
         <header className="panel-header">
           <div className="brand-mark" aria-hidden="true"><i /><i /><i /></div>
           <div>
-            <p className="eyebrow">K-means · 3D lab</p>
-            <h1>Watch clusters find their centre.</h1>
+            <p className="eyebrow">{ALGORITHMS[config.algorithm].label} · 3D lab</p>
+            <h1>Watch structure emerge in 3D.</h1>
           </div>
         </header>
-        <p className="lede">Assign points. Update centroids. Repeat until the geometry stops changing.</p>
+        <p className="lede">{ALGORITHMS[config.algorithm].description}</p>
+
+        <div className="control-group algorithm-control">
+          <div className="label-row"><span>Algorithm</span><strong>{ALGORITHMS[config.algorithm].short}</strong></div>
+          <div className="algorithm-grid" aria-label="Clustering algorithm">
+            {(Object.keys(ALGORITHMS) as AlgorithmId[]).map((algorithm) => (
+              <button
+                key={algorithm}
+                type="button"
+                className={config.algorithm === algorithm ? "is-active" : ""}
+                onClick={() => selectAlgorithm(algorithm)}
+              >
+                {ALGORITHMS[algorithm].label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="control-group">
           <div className="label-row"><label htmlFor="dataset">Dataset</label><strong>{DATASETS[config.dataset].badge}</strong></div>
@@ -1184,7 +1453,7 @@ export default function KMeansLab() {
           </div>
         </div>
 
-        <div className="control-group">
+        {config.algorithm !== "dbscan" && <div className="control-group">
           <div className="label-row"><span>Initialization</span><strong>{STRATEGIES[config.strategy].detail}</strong></div>
           <div className="segmented-control" aria-label="Centroid initialization method">
             {(Object.keys(STRATEGIES) as Strategy[]).map((strategy) => (
@@ -1198,12 +1467,25 @@ export default function KMeansLab() {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
-        <label className="range-control">
+        {config.algorithm !== "dbscan" && <label className="range-control">
           <span><b>Clusters (K)</b><strong>{config.k}</strong></span>
           <input type="range" min="2" max="6" step="1" value={config.k} onChange={(event) => changeConfig("k", Number(event.target.value))} />
-        </label>
+        </label>}
+
+        {config.algorithm === "dbscan" && (
+          <div className="density-controls">
+            <label className="range-control">
+              <span><b>Neighbour radius (ε)</b><strong>{config.epsilon.toFixed(2)}</strong></span>
+              <input type="range" min="0.75" max="6" step="0.25" value={config.epsilon} onChange={(event) => changeConfig("epsilon", Number(event.target.value))} />
+            </label>
+            <label className="range-control">
+              <span><b>Minimum points</b><strong>{config.minPoints}</strong></span>
+              <input type="range" min="3" max="16" step="1" value={config.minPoints} onChange={(event) => changeConfig("minPoints", Number(event.target.value))} />
+            </label>
+          </div>
+        )}
 
         <label className={`range-control ${config.dataset === "classic" ? "is-disabled" : ""}`}>
           <span><b>Observations</b><strong>{model.points.length}</strong></span>
@@ -1218,9 +1500,9 @@ export default function KMeansLab() {
           />
         </label>
 
-        <div className={`seed-control ${isSeeding ? "is-active" : ""}`}>
+        {config.algorithm !== "dbscan" && <div className={`seed-control ${isSeeding ? "is-active" : ""}`}>
           <div className="label-row">
-            <span>Centroid placement</span>
+            <span>{config.algorithm === "kmedoids" ? "Medoid" : config.algorithm === "gmm" ? "Component" : "Centroid"} placement</span>
             <strong>{model.centroids.length} / {config.k} seeds</strong>
           </div>
           <div className="seed-actions">
@@ -1228,11 +1510,11 @@ export default function KMeansLab() {
             <button type="button" onClick={addRandomCentroid}>Random <span>＋</span></button>
           </div>
           <small>{isSeeding ? "Select observations in the scene, or add random seeds one at a time." : "Re-seed manually at any time; Reset now produces a fresh automatic initialization."}</small>
-        </div>
+        </div>}
 
         <div className="layer-controls" aria-label="Scene layers">
           <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="3D regions" />
-          <Switch checked={showLinks} onChange={() => setShowLinks((value) => !value)} label="Distance lines" />
+          {config.algorithm !== "dbscan" && <Switch checked={showLinks} onChange={() => setShowLinks((value) => !value)} label={config.algorithm === "gmm" ? "Hard assignment lines" : "Distance lines"} />}
           <Switch checked={autoRotate} onChange={() => setAutoRotate((value) => !value)} label="Auto orbit" />
         </div>
 
@@ -1261,7 +1543,7 @@ export default function KMeansLab() {
           <i aria-hidden="true">{isPlaying ? "Ⅱ" : "▶"}</i>
           <span>
             <strong>{isPlaying ? "Pause autoplay" : "Run to convergence"}</strong>
-            <small>{isPlaying ? "Following every centroid move" : "Play every step until all means settle"}</small>
+            <small>{isPlaying ? "Following every algorithm step" : config.algorithm === "dbscan" ? "Scan the complete density field" : "Play every step until the model settles"}</small>
           </span>
         </button>
 
@@ -1289,6 +1571,14 @@ export default function KMeansLab() {
           <div className="equation">
             {!readyToRun ? (
               <><span>μ</span><b>←</b><strong>choose an observation</strong></>
+            ) : config.algorithm === "dbscan" ? (
+              <><span>Nε(x)</span><b>≥</b><strong>minPts</strong></>
+            ) : config.algorithm === "gmm" && model.phase === "assigned" ? (
+              <><span>μₖ</span><b>←</b><strong>Σ γᵢₖxᵢ / Σ γᵢₖ</strong></>
+            ) : config.algorithm === "gmm" ? (
+              <><span>γᵢₖ</span><b>∝</b><strong>πₖ N(xᵢ | μₖ, σ²ₖ)</strong></>
+            ) : config.algorithm === "kmedoids" && model.phase === "assigned" ? (
+              <><span>mⱼ</span><b>=</b><strong>arg min Σ d(xᵢ, m)</strong></>
             ) : model.phase === "assigned" ? (
               <><span>μⱼ</span><b>=</b><strong>Σ xᵢ / |Cⱼ|</strong></>
             ) : (
@@ -1302,7 +1592,7 @@ export default function KMeansLab() {
           <div className="metric-grid">
             <div><span>Iterations</span><strong>{model.iteration}</strong></div>
             <div><span>Points moved</span><strong>{model.phase === "ready" ? "—" : model.moved}</strong></div>
-            <div><span>Inertia</span><strong>{model.phase === "ready" ? "—" : formatMetric(model.inertia)}</strong></div>
+            <div><span>{objectiveLabel}</span><strong>{model.phase === "ready" ? "—" : formatMetric(model.inertia)}</strong></div>
             <div><span>Max shift</span><strong>{model.iteration === 0 ? "—" : formatMetric(model.maxShift)}</strong></div>
           </div>
           <div className="cluster-list">
@@ -1316,11 +1606,18 @@ export default function KMeansLab() {
                 aria-pressed={focusedCluster === index}
                 title={`Isolate cluster ${index + 1}`}
               >
-                <i style={{ background: CLUSTER_COLORS[index], boxShadow: `0 0 16px ${CLUSTER_COLORS[index]}55` }} />
+                <i style={{ background: getClusterColor(index), boxShadow: `0 0 16px ${getClusterColor(index)}55` }} />
                 <span>Cluster {index + 1}</span>
                 <strong>{model.phase === "ready" ? "—" : clusterCounts[index]} pts</strong>
               </button>
             ))}
+            {config.algorithm === "dbscan" && model.phase !== "ready" && (
+              <div className="noise-summary">
+                <i style={{ background: NOISE_COLOR }} />
+                <span>Noise</span>
+                <strong>{noiseCount} pts</strong>
+              </div>
+            )}
           </div>
         </section>
 
@@ -1331,15 +1628,21 @@ export default function KMeansLab() {
               <button type="button" onClick={() => setSelected(null)} aria-label="Close point inspector">×</button>
             </div>
             <div className="point-inspector-title">
-              <i style={{ background: selectedPoint.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[selectedPoint.cluster] }} />
-              <div><strong>Point {selectedPoint.id + 1}</strong><span>{selectedPoint.cluster < 0 ? "Awaiting assignment" : `Cluster ${selectedPoint.cluster + 1}`}</span></div>
+              <i style={{ background: selectedPoint.cluster === -2 ? NOISE_COLOR : selectedPoint.cluster < 0 ? NEUTRAL_COLOR : getClusterColor(selectedPoint.cluster) }} />
+              <div><strong>Point {selectedPoint.id + 1}</strong><span>{selectedPoint.cluster === -2 ? "Density noise" : selectedPoint.cluster < 0 ? "Awaiting assignment" : `Cluster ${selectedPoint.cluster + 1}`}</span></div>
             </div>
             <div className="coordinate-grid">
               {selectedPoint.position.map((coordinate, index) => (
                 <div key={index}><span>{["X", "Y", "Z"][index]}</span><strong>{coordinate.toFixed(2)}</strong></div>
               ))}
             </div>
-            <p>{selectedDistance === null ? "Run an assignment step to measure this point against its centroid." : `${selectedDistance.toFixed(2)} units from its current centroid.`}</p>
+            <p>{selectedConfidence !== null
+              ? `${(selectedConfidence * 100).toFixed(1)}% posterior membership confidence.`
+              : selectedPoint.cluster === -2
+                ? "This observation does not have enough density-connected neighbours."
+                : selectedDistance === null
+                  ? "Run an assignment step to inspect this observation's relationship to the model."
+                  : `${selectedDistance.toFixed(2)} units from its current representative.`}</p>
           </section>
         )}
       </aside>
@@ -1356,7 +1659,7 @@ export default function KMeansLab() {
         </button>
         <div className="playback-copy">
           <span>{!readyToRun ? "Seed setup" : model.phase === "converged" ? "Complete" : isPlaying ? "Autoplay running" : "Next step"}</span>
-          <strong>{!readyToRun ? `${model.centroids.length} of ${config.k} centroids placed` : model.phase === "converged" ? "Exact cluster means found" : isPlaying ? `${nextAction} · until stable` : nextAction}</strong>
+          <strong>{!readyToRun ? `${model.centroids.length} of ${config.k} representatives placed` : model.phase === "converged" ? config.algorithm === "dbscan" ? `${model.centroids.length} clusters · ${noiseCount} noise` : `${ALGORITHMS[config.algorithm].label} solution found` : isPlaying ? `${nextAction} · until stable` : nextAction}</strong>
         </div>
         <div className="event-track" aria-hidden="true">
           {model.events.slice(-7).map((event, index) => (

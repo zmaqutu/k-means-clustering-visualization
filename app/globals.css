@@ -178,6 +178,22 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .segmented-control button:hover { color: #ffffff; }
 .segmented-control button.is-active { color: #071319; background: var(--cyan); box-shadow: 0 5px 18px rgba(118, 228, 247, 0.18); }
+.algorithm-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+.algorithm-grid button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid rgba(177, 199, 218, 0.14);
+  border-radius: 5px;
+  color: #98adbf;
+  background: rgba(7, 13, 18, 0.5);
+  cursor: pointer;
+  font-size: 0.65rem;
+  font-weight: 780;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+.algorithm-grid button:hover { border-color: rgba(118, 228, 247, 0.38); color: #ffffff; }
+.algorithm-grid button.is-active { border-color: rgba(118, 228, 247, 0.48); color: #071319; background: var(--cyan); box-shadow: 0 5px 18px rgba(118, 228, 247, 0.16); }
+.density-controls { display: grid; gap: 12px; padding: 11px; border: 1px solid rgba(177, 199, 218, 0.14); border-radius: 7px; background: rgba(7, 13, 18, 0.4); }
 
 .range-control > span { display: flex; align-items: center; justify-content: space-between; }
 .range-control strong { color: var(--white); font-family: var(--font-geist-mono), monospace; font-size: 0.75rem; }
@@ -373,6 +389,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .cluster-list > button:hover:not(:disabled) { border-color: rgba(177, 199, 218, 0.14); background: rgba(118, 228, 247, 0.05); }
 .cluster-list > button.is-focused { border-color: rgba(118, 228, 247, 0.32); background: rgba(14, 116, 144, 0.15); }
 .cluster-list > button:disabled { cursor: default; }
+.noise-summary { display: grid; grid-template-columns: 8px 1fr auto; gap: 9px; align-items: center; min-height: 29px; padding: 0 6px; }
 .cluster-list i { width: 7px; height: 7px; border-radius: 50%; }
 .cluster-list span { color: #aebfd0; font-size: 0.72rem; }
 .cluster-list strong { color: #f4f8fb; font-family: var(--font-geist-mono), monospace; font-size: 0.69rem; }
