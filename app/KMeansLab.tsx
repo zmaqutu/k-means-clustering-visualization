@@ -285,9 +285,9 @@ function calculateInertia(points: PointDatum[], centroids: Vec3[]) {
   ), 0);
 }
 
-function createModel(config: Config, seed: number): Model {
-  const points = makePoints(config.dataset, config.pointCount, seed);
-  const centroids = initializeCentroids(points, config.k, config.strategy, seed);
+function createModel(config: Config, dataSeed: number, initializationSeed = dataSeed): Model {
+  const points = makePoints(config.dataset, config.pointCount, dataSeed);
+  const centroids = initializeCentroids(points, config.k, config.strategy, initializationSeed);
   return {
     points,
     centroids,
@@ -355,10 +355,11 @@ function advanceModel(model: Model): Model {
   };
 }
 
-function PointCloud({ points, hovered, onHover }: {
+function PointCloud({ points, hovered, onHover, onPlace }: {
   points: PointDatum[];
   hovered: number | null;
   onHover: (id: number | null) => void;
+  onPlace?: (position: Vec3) => void;
 }) {
   const currentColors = useRef<THREE.Color[]>([]);
   const dummy = useMemo(() => new THREE.Object3D(), []);
@@ -446,6 +447,13 @@ function PointCloud({ points, hovered, onHover }: {
     if (Number.isInteger(event.instanceId)) onHover(points[event.instanceId as number]?.id ?? null);
   };
 
+  const handlePlace = (event: ThreeEvent<MouseEvent>) => {
+    if (!onPlace || !Number.isInteger(event.instanceId)) return;
+    event.stopPropagation();
+    const point = points[event.instanceId as number];
+    if (point) onPlace(point.position);
+  };
+
   return (
     <>
       <primitive object={glowMesh} raycast={() => null} />
@@ -453,6 +461,7 @@ function PointCloud({ points, hovered, onHover }: {
         object={coreMesh}
         onPointerMove={handlePointer}
         onPointerOut={() => onHover(null)}
+        onClick={handlePlace}
       />
     </>
   );
@@ -538,154 +547,83 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
   );
 }
 
-const envelopeVertexShader = `
-  varying vec3 vNormal;
-  varying vec3 vViewDirection;
+const fieldVertexShader = `
+  varying vec3 vWorldPosition;
 
   void main() {
-    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-    vNormal = normalize(normalMatrix * normal);
-    vViewDirection = normalize(-viewPosition.xyz);
-    gl_Position = projectionMatrix * viewPosition;
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
   }
 `;
 
-const envelopeFragmentShader = `
-  uniform vec3 uColor;
-  varying vec3 vNormal;
-  varying vec3 vViewDirection;
+const fieldFragmentShader = `
+  uniform int uCount;
+  uniform vec3 uCentroids[6];
+  uniform vec3 uColors[6];
+  varying vec3 vWorldPosition;
 
   void main() {
-    float facing = abs(dot(normalize(vNormal), normalize(vViewDirection)));
-    float fresnel = pow(1.0 - facing, 2.25);
-    float alpha = 0.018 + fresnel * 0.16;
-    gl_FragColor = vec4(uColor, alpha);
+    float closest = 100000.0;
+    float second = 100000.0;
+    vec3 color = vec3(0.08, 0.12, 0.16);
+
+    for (int i = 0; i < 6; i++) {
+      if (i >= uCount) break;
+      vec2 delta = vWorldPosition.xz - uCentroids[i].xz;
+      float distanceToSeed = dot(delta, delta);
+      if (distanceToSeed < closest) {
+        second = closest;
+        closest = distanceToSeed;
+        color = uColors[i];
+      } else if (distanceToSeed < second) {
+        second = distanceToSeed;
+      }
+    }
+
+    float boundary = uCount > 1
+      ? 1.0 - smoothstep(0.0, 0.95, sqrt(second) - sqrt(closest))
+      : 0.0;
+    vec3 fieldColor = mix(color * 0.64, color, boundary * 0.42);
+    gl_FragColor = vec4(fieldColor, 0.19 + boundary * 0.09);
   }
 `;
 
-function ClusterEnvelope({ members, centroid, index }: {
-  members: PointDatum[];
-  centroid: Vec3;
-  index: number;
-}) {
-  const mesh = useRef<THREE.Mesh>(null);
-  const geometry = useMemo(() => new THREE.SphereGeometry(1, 48, 32), []);
-  const fit = useMemo(() => {
-    if (members.length < 3) {
-      return {
-        position: new THREE.Vector3(...centroid),
-        scale: new THREE.Vector3(1.5, 1.5, 1.5),
-        quaternion: new THREE.Quaternion(),
-      };
-    }
-
-    const covariance = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-    members.forEach((point) => {
-      const delta = point.position.map((value, axis) => value - centroid[axis]) as Vec3;
-      for (let row = 0; row < 3; row += 1) {
-        for (let column = 0; column < 3; column += 1) {
-          covariance[row][column] += delta[row] * delta[column] / members.length;
-        }
-      }
-    });
-
-    const eigenvectors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    for (let iteration = 0; iteration < 14; iteration += 1) {
-      const pairs: [number, number][] = [[0, 1], [0, 2], [1, 2]];
-      const [p, q] = pairs.reduce((best, pair) => (
-        Math.abs(covariance[pair[0]][pair[1]]) > Math.abs(covariance[best[0]][best[1]]) ? pair : best
-      ));
-      if (Math.abs(covariance[p][q]) < 1e-8) break;
-      const angle = 0.5 * Math.atan2(2 * covariance[p][q], covariance[q][q] - covariance[p][p]);
-      const cosine = Math.cos(angle);
-      const sine = Math.sin(angle);
-      const pp = covariance[p][p];
-      const qq = covariance[q][q];
-      const pq = covariance[p][q];
-      for (let axis = 0; axis < 3; axis += 1) {
-        if (axis === p || axis === q) continue;
-        const ap = covariance[axis][p];
-        const aq = covariance[axis][q];
-        covariance[axis][p] = covariance[p][axis] = cosine * ap - sine * aq;
-        covariance[axis][q] = covariance[q][axis] = sine * ap + cosine * aq;
-      }
-      covariance[p][p] = cosine * cosine * pp - 2 * sine * cosine * pq + sine * sine * qq;
-      covariance[q][q] = sine * sine * pp + 2 * sine * cosine * pq + cosine * cosine * qq;
-      covariance[p][q] = covariance[q][p] = 0;
-      for (let axis = 0; axis < 3; axis += 1) {
-        const vp = eigenvectors[axis][p];
-        const vq = eigenvectors[axis][q];
-        eigenvectors[axis][p] = cosine * vp - sine * vq;
-        eigenvectors[axis][q] = sine * vp + cosine * vq;
-      }
-    }
-
-    const order = [0, 1, 2].sort((a, b) => covariance[b][b] - covariance[a][a]);
-    const axes = order.map((column) => new THREE.Vector3(
-      eigenvectors[0][column], eigenvectors[1][column], eigenvectors[2][column],
-    ).normalize());
-    if (new THREE.Vector3().crossVectors(axes[0], axes[1]).dot(axes[2]) < 0) axes[2].negate();
-    const basis = new THREE.Matrix4().makeBasis(axes[0], axes[1], axes[2]);
-    const radii = order.map((axis) => THREE.MathUtils.clamp(Math.sqrt(Math.max(covariance[axis][axis], 0)) * 2.45 + 0.85, 1.5, 16));
-    return {
-      position: new THREE.Vector3(...centroid),
-      scale: new THREE.Vector3(radii[0], radii[1], radii[2]),
-      quaternion: new THREE.Quaternion().setFromRotationMatrix(basis),
-    };
-  }, [centroid, members]);
+function DecisionField({ centroids }: { centroids: Vec3[] }) {
+  const animated = useRef(Array.from({ length: 6 }, () => new THREE.Vector3()));
   const uniforms = useMemo(() => ({
-    uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) },
-  }), [index]);
+    uCount: { value: centroids.length },
+    uCentroids: { value: animated.current },
+    uColors: { value: CLUSTER_COLORS.map((color) => new THREE.Color(color)) },
+  }), []);
 
-  useEffect(() => () => geometry.dispose(), [geometry]);
   useFrame((_, delta) => {
-    if (!mesh.current) return;
-    const damping = 1 - Math.exp(-delta * 4.2);
-    mesh.current.position.lerp(fit.position, damping);
-    mesh.current.scale.lerp(fit.scale, damping);
-    mesh.current.quaternion.slerp(fit.quaternion, damping);
+    uniforms.uCount.value = centroids.length;
+    const damping = 1 - Math.exp(-delta * 4.6);
+    centroids.forEach((centroid, index) => {
+      const target = new THREE.Vector3(...centroid);
+      if (animated.current[index].lengthSq() === 0) animated.current[index].copy(target);
+      animated.current[index].lerp(target, damping);
+    });
   });
 
+  if (centroids.length === 0) return null;
   return (
-    <mesh
-      ref={mesh}
-      geometry={geometry}
-      position={fit.position}
-      scale={fit.scale}
-      quaternion={fit.quaternion}
-      raycast={() => null}
-      renderOrder={-1}
-    >
+    <mesh rotation-x={-Math.PI / 2} position={[0, -11.53, 0]} renderOrder={-3} raycast={() => null}>
+      <planeGeometry args={[58, 58]} />
       <shaderMaterial
-        vertexShader={envelopeVertexShader}
-        fragmentShader={envelopeFragmentShader}
+        vertexShader={fieldVertexShader}
+        fragmentShader={fieldFragmentShader}
         uniforms={uniforms}
         transparent
         depthWrite={false}
-        side={THREE.DoubleSide}
         toneMapped={false}
-        blending={THREE.AdditiveBlending}
       />
     </mesh>
   );
 }
 
-function ClusterHalos({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
-  return (
-    <>
-      {centroids.map((centroid, index) => (
-        <ClusterEnvelope
-          key={index}
-          members={points.filter((point) => point.cluster === index)}
-          centroid={centroid}
-          index={index}
-        />
-      ))}
-    </>
-  );
-}
-
-function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHover }: {
+function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHover, onPlace }: {
   model: Model;
   runId: number;
   hovered: number | null;
@@ -693,6 +631,7 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
   showVolumes: boolean;
   autoRotate: boolean;
   onHover: (id: number | null) => void;
+  onPlace?: (position: Vec3) => void;
 }) {
   const hoveredPoint = hovered === null ? null : model.points.find((point) => point.id === hovered);
   return (
@@ -702,9 +641,9 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <ambientLight intensity={1.35} color="#c7d4df" />
       <directionalLight position={[12, 18, 9]} intensity={2.35} color="#ffffff" />
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
-      <PointCloud points={model.points} hovered={hovered} onHover={onHover} />
+      <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
-      {showVolumes && model.phase !== "ready" && <ClusterHalos points={model.points} centroids={model.centroids} />}
+      {showVolumes && <DecisionField key={runId} centroids={model.centroids} />}
       {model.centroids.map((centroid, index) => (
         <AnimatedCentroid key={`${runId}-${index}`} position={centroid} index={index} />
       ))}
@@ -753,24 +692,32 @@ function formatMetric(value: number) {
 export default function KMeansLab() {
   const [config, setConfig] = useState<Config>({ dataset: "gaussian", strategy: "plusplus", k: 4, pointCount: 320 });
   const [seed, setSeed] = useState(1207);
-  const [model, setModel] = useState<Model>(() => createModel(config, seed));
+  const [model, setModel] = useState<Model>(() => createModel(config, seed, 4921));
   const [runId, setRunId] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
   const [showLinks, setShowLinks] = useState(true);
   const [showVolumes, setShowVolumes] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
 
-  const step = useCallback(() => setModel((current) => advanceModel(current)), []);
+  const readyToRun = model.centroids.length === config.k;
+  const step = useCallback(() => setModel((current) => (
+    current.centroids.length === config.k ? advanceModel(current) : current
+  )), [config.k]);
 
   useEffect(() => {
-    if (!isPlaying || model.phase === "converged") {
+    if (!isPlaying || model.phase === "converged" || !readyToRun) {
       if (model.phase === "converged") setIsPlaying(false);
       return undefined;
     }
     const timer = window.setInterval(step, 820);
     return () => window.clearInterval(timer);
-  }, [isPlaying, model.phase, step]);
+  }, [isPlaying, model.phase, readyToRun, step]);
+
+  useEffect(() => {
+    if (isSeeding && readyToRun) setIsSeeding(false);
+  }, [isSeeding, readyToRun]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -784,7 +731,8 @@ export default function KMeansLab() {
       } else if (event.key.toLowerCase() === "r") {
         setIsPlaying(false);
         setRunId((current) => current + 1);
-        setModel(createModel(config, seed));
+        setIsSeeding(false);
+        setModel(createModel(config, seed, Math.floor(Math.random() * 1_000_000_000)));
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -793,10 +741,11 @@ export default function KMeansLab() {
 
   const rebuild = (nextConfig: Config, nextSeed = seed) => {
     setIsPlaying(false);
+    setIsSeeding(false);
     setHovered(null);
     setRunId((current) => current + 1);
     setConfig(nextConfig);
-    setModel(createModel(nextConfig, nextSeed));
+    setModel(createModel(nextConfig, nextSeed, Math.floor(Math.random() * 1_000_000_000)));
   };
 
   const changeConfig = <Key extends keyof Config>(key: Key, value: Config[Key]) => {
@@ -804,9 +753,69 @@ export default function KMeansLab() {
   };
 
   const newSample = () => {
-    const nextSeed = seed + 137;
+    const nextSeed = Math.floor(Math.random() * 1_000_000_000);
     setSeed(nextSeed);
     rebuild(config, nextSeed);
+  };
+
+  const clearForPlacement = () => {
+    setIsPlaying(false);
+    setIsSeeding(true);
+    setHovered(null);
+    setRunId((current) => current + 1);
+    setModel((current) => ({
+      ...current,
+      points: current.points.map((point) => ({ ...point, cluster: -1 })),
+      centroids: [],
+      phase: "ready",
+      iteration: 0,
+      moved: 0,
+      maxShift: 0,
+      inertia: 0,
+      events: ["Manual centroid placement started"],
+    }));
+  };
+
+  const placeCentroid = useCallback((position: Vec3) => {
+    if (!isSeeding) return;
+    setModel((current) => {
+      if (current.centroids.length >= config.k) return current;
+      const duplicate = current.centroids.some((centroid) => distanceSquared(centroid, position) < 0.0001);
+      if (duplicate) return current;
+      const centroids = [...current.centroids, [...position] as Vec3];
+      return {
+        ...current,
+        centroids,
+        events: [...current.events, `Centroid ${centroids.length} placed manually`],
+      };
+    });
+  }, [config.k, isSeeding]);
+
+  const addRandomCentroid = () => {
+    setIsPlaying(false);
+    setHovered(null);
+    if (model.centroids.length >= config.k) setRunId((current) => current + 1);
+    setIsSeeding(true);
+    setModel((current) => {
+      const centroids = current.centroids.length >= config.k ? [] : current.centroids;
+      const candidates = current.points.filter((point) => (
+        !centroids.some((centroid) => distanceSquared(centroid, point.position) < 0.0001)
+      ));
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      if (!chosen) return current;
+      const nextCentroids = [...centroids, [...chosen.position] as Vec3];
+      return {
+        ...current,
+        points: current.points.map((point) => ({ ...point, cluster: -1 })),
+        centroids: nextCentroids,
+        phase: "ready",
+        iteration: 0,
+        moved: 0,
+        maxShift: 0,
+        inertia: 0,
+        events: [...(centroids.length === 0 ? [] : current.events), `Centroid ${nextCentroids.length} placed randomly`],
+      };
+    });
   };
 
   const clusterCounts = useMemo(() => model.centroids.map((_, index) => (
@@ -814,7 +823,9 @@ export default function KMeansLab() {
   )), [model.centroids, model.points]);
 
   const nextAction = model.phase === "assigned" ? "Update centroids" : "Assign points";
-  const status = model.phase === "converged"
+  const status = !readyToRun
+    ? { kicker: "Centroid setup", title: `Place seed ${model.centroids.length + 1} of ${config.k}`, copy: "Click an observation to use its exact 3D position, or add a random seed from the controls." }
+    : model.phase === "converged"
     ? { kicker: "System settled", title: "Convergence reached", copy: "Assignments and centroid positions are no longer changing." }
     : model.phase === "assigned"
       ? { kicker: `Iteration ${model.iteration + 1} · Step 2`, title: "Move each centroid", copy: "Replace every centroid with the mean position of the points currently assigned to it." }
@@ -822,7 +833,7 @@ export default function KMeansLab() {
 
   return (
     <main className="lab-shell">
-      <div className="scene-layer" aria-label="Interactive three-dimensional K-means visualization">
+      <div className={`scene-layer ${isSeeding ? "is-seeding" : ""}`} aria-label="Interactive three-dimensional K-means visualization">
         <Canvas
           camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
           dpr={[1, 1.75]}
@@ -837,6 +848,7 @@ export default function KMeansLab() {
             showVolumes={showVolumes}
             autoRotate={autoRotate}
             onHover={setHovered}
+            onPlace={isSeeding ? placeCentroid : undefined}
           />
         </Canvas>
       </div>
@@ -893,8 +905,20 @@ export default function KMeansLab() {
           />
         </label>
 
+        <div className={`seed-control ${isSeeding ? "is-active" : ""}`}>
+          <div className="label-row">
+            <span>Centroid placement</span>
+            <strong>{model.centroids.length} / {config.k} seeds</strong>
+          </div>
+          <div className="seed-actions">
+            <button type="button" onClick={clearForPlacement}>Pick on points</button>
+            <button type="button" onClick={addRandomCentroid}>Random <span>＋</span></button>
+          </div>
+          <small>{isSeeding ? "Select observations in the scene, or add random seeds one at a time." : "Re-seed manually at any time; Reset now produces a fresh automatic initialization."}</small>
+        </div>
+
         <div className="layer-controls" aria-label="Scene layers">
-          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="Group halos" />
+          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="Decision field" />
           <Switch checked={showLinks} onChange={() => setShowLinks((value) => !value)} label="Distance lines" />
           <Switch checked={autoRotate} onChange={() => setAutoRotate((value) => !value)} label="Auto orbit" />
         </div>
@@ -903,7 +927,7 @@ export default function KMeansLab() {
           type="button"
           className={`auto-run-button ${isPlaying ? "is-running" : ""}`}
           onClick={() => setIsPlaying((playing) => !playing)}
-          disabled={model.phase === "converged"}
+          disabled={model.phase === "converged" || !readyToRun}
         >
           <i aria-hidden="true">{isPlaying ? "Ⅱ" : "▶"}</i>
           <span>
@@ -932,7 +956,9 @@ export default function KMeansLab() {
           <h2>{status.title}</h2>
           <p>{status.copy}</p>
           <div className="equation">
-            {model.phase === "assigned" ? (
+            {!readyToRun ? (
+              <><span>μ</span><b>←</b><strong>choose an observation</strong></>
+            ) : model.phase === "assigned" ? (
               <><span>μⱼ</span><b>=</b><strong>Σ xᵢ / |Cⱼ|</strong></>
             ) : (
               <><span>c(xᵢ)</span><b>=</b><strong>arg min ‖xᵢ − μⱼ‖²</strong></>
@@ -965,27 +991,27 @@ export default function KMeansLab() {
           type="button"
           className="play-button"
           onClick={() => setIsPlaying((playing) => !playing)}
-          disabled={model.phase === "converged"}
+          disabled={model.phase === "converged" || !readyToRun}
           aria-label={isPlaying ? "Pause automatic playback" : "Run automatically"}
         >
           {isPlaying ? "Ⅱ" : "▶"}
         </button>
         <div className="playback-copy">
-          <span>{model.phase === "converged" ? "Complete" : isPlaying ? "Autoplay running" : "Next step"}</span>
-          <strong>{model.phase === "converged" ? "Exact cluster means found" : isPlaying ? `${nextAction} · until stable` : nextAction}</strong>
+          <span>{!readyToRun ? "Seed setup" : model.phase === "converged" ? "Complete" : isPlaying ? "Autoplay running" : "Next step"}</span>
+          <strong>{!readyToRun ? `${model.centroids.length} of ${config.k} centroids placed` : model.phase === "converged" ? "Exact cluster means found" : isPlaying ? `${nextAction} · until stable` : nextAction}</strong>
         </div>
         <div className="event-track" aria-hidden="true">
           {model.events.slice(-7).map((event, index) => (
             <i key={`${event}-${index}`} className={index === model.events.slice(-7).length - 1 ? "is-current" : ""} />
           ))}
         </div>
-        <button type="button" className="step-button" onClick={step} disabled={model.phase === "converged"}>
+        <button type="button" className="step-button" onClick={step} disabled={model.phase === "converged" || !readyToRun}>
           Step <span>→</span>
         </button>
       </section>
 
       <div className="scene-hint">
-        <span>Drag to orbit</span><i /> <span>Scroll to zoom</span><i /> <span>Space to step</span>
+        <span>{isSeeding ? "Click a point to seed" : "Drag to orbit"}</span><i /> <span>Scroll to zoom</span><i /> <span>Space to step</span>
       </div>
     </main>
   );

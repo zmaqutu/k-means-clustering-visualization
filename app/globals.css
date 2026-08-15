@@ -40,6 +40,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 .scene-layer { position: absolute; inset: 0; z-index: 0; }
 .scene-layer canvas { position: absolute !important; inset: 0; }
+.scene-layer.is-seeding canvas { cursor: crosshair; }
 
 .control-panel,
 .insight-card,
@@ -162,6 +163,34 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .range-control input { width: 100%; accent-color: var(--cyan); cursor: pointer; }
 .range-control.is-disabled { opacity: 0.4; }
 .range-control.is-disabled input { cursor: not-allowed; }
+
+.seed-control {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid rgba(177, 199, 218, 0.14);
+  border-radius: 7px;
+  background: rgba(7, 13, 18, 0.4);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+.seed-control.is-active { border-color: rgba(118, 228, 247, 0.42); background: rgba(14, 116, 144, 0.12); }
+.seed-actions { display: grid; grid-template-columns: 1.2fr 1fr; gap: 6px; }
+.seed-actions button {
+  height: 34px;
+  border: 1px solid rgba(177, 199, 218, 0.2);
+  border-radius: 5px;
+  color: #dce9f2;
+  background: rgba(10, 20, 28, 0.76);
+  cursor: pointer;
+  font-size: 0.67rem;
+  font-weight: 780;
+}
+.seed-actions button:hover { border-color: rgba(118, 228, 247, 0.5); background: rgba(14, 116, 144, 0.2); }
+.seed-actions button:last-child { color: #06212a; background: var(--cyan); }
+.seed-actions button:last-child:hover { background: #9cedfb; }
+.seed-actions button span { margin-left: 4px; font-size: 0.8rem; }
+.seed-control small { color: #8299ac; font-size: 0.62rem; line-height: 1.38; }
+.seed-control.is-active small { color: #b9d5df; }
 
 .layer-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .layer-switch {
