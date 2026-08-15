@@ -4,6 +4,7 @@ import { Html, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { MarchingCubes } from "three/examples/jsm/objects/MarchingCubes.js";
 
 type Vec3 = [number, number, number];
 type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
@@ -600,140 +601,64 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
   );
 }
 
-const volumeVertexShader = `
-  varying vec3 vWorldPosition;
-
-  void main() {
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = worldPosition.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
-  }
-`;
-
-const volumeFragmentShader = `
-  uniform int uCount;
-  uniform vec3 uCentroids[6];
-  uniform vec3 uColors[6];
-  uniform vec3 uBoundsMin;
-  uniform vec3 uBoundsMax;
-  varying vec3 vWorldPosition;
-
-  void main() {
-    vec3 rayDirection = normalize(vWorldPosition - cameraPosition);
-    vec3 safeDirection = vec3(
-      abs(rayDirection.x) < 0.0001 ? 0.0001 : rayDirection.x,
-      abs(rayDirection.y) < 0.0001 ? 0.0001 : rayDirection.y,
-      abs(rayDirection.z) < 0.0001 ? 0.0001 : rayDirection.z
-    );
-    vec3 inverseDirection = 1.0 / safeDirection;
-    vec3 first = (uBoundsMin - cameraPosition) * inverseDirection;
-    vec3 second = (uBoundsMax - cameraPosition) * inverseDirection;
-    vec3 nearPlane = min(first, second);
-    vec3 farPlane = max(first, second);
-    float nearDistance = max(max(nearPlane.x, nearPlane.y), max(nearPlane.z, 0.0));
-    float farDistance = min(min(farPlane.x, farPlane.y), farPlane.z);
-    if (farDistance <= nearDistance) discard;
-
-    vec3 accumulatedColor = vec3(0.0);
-    float accumulatedAlpha = 0.0;
-    float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-
-    for (int step = 0; step < 48; step++) {
-      float progress = (float(step) + jitter) / 48.0;
-      vec3 samplePosition = cameraPosition + rayDirection * mix(nearDistance, farDistance, progress);
-      float closest = 100000.0;
-      float runnerUp = 100000.0;
-      vec3 closestColor = vec3(0.2);
-      vec3 runnerUpColor = vec3(0.2);
-
-      for (int i = 0; i < 6; i++) {
-        if (i >= uCount) break;
-        vec3 delta = samplePosition - uCentroids[i];
-        float distanceToCentroid = dot(delta, delta);
-        if (distanceToCentroid < closest) {
-          runnerUp = closest;
-          runnerUpColor = closestColor;
-          closest = distanceToCentroid;
-          closestColor = uColors[i];
-        } else if (distanceToCentroid < runnerUp) {
-          runnerUp = distanceToCentroid;
-          runnerUpColor = uColors[i];
-        }
-      }
-
-      if (uCount == 1) {
-        runnerUp = closest;
-        runnerUpColor = closestColor;
-      }
-      float boundaryGap = max(sqrt(runnerUp) - sqrt(closest), 0.0);
-      float boundaryBlend = 0.5 * (1.0 - smoothstep(0.0, 2.4, boundaryGap));
-      float boundaryCore = 1.0 - smoothstep(0.15, 0.78, boundaryGap);
-      float boundaryHalo = 1.0 - smoothstep(0.45, 1.65, boundaryGap);
-      vec3 blendedRegion = mix(closestColor, runnerUpColor, boundaryBlend);
-      vec3 membraneColor = mix(mix(closestColor, runnerUpColor, 0.5), vec3(1.0), 0.18);
-      vec3 sampleColor = mix(blendedRegion, membraneColor, boundaryHalo * 0.72);
-      vec3 edgeDistances = min(samplePosition - uBoundsMin, uBoundsMax - samplePosition);
-      float edgeDistance = min(min(edgeDistances.x, edgeDistances.y), edgeDistances.z);
-      float exteriorFeather = smoothstep(0.0, 3.4, edgeDistance);
-      float proximity = exp(-closest * 0.012);
-      float sampleAlpha = exteriorFeather * (
-        0.0032 + proximity * 0.0128 + boundaryHalo * 0.009 + boundaryCore * 0.038
-      );
-      float contribution = (1.0 - accumulatedAlpha) * sampleAlpha;
-      accumulatedColor += sampleColor * contribution;
-      accumulatedAlpha += contribution;
-      if (accumulatedAlpha > 0.72) break;
-    }
-
-    if (accumulatedAlpha < 0.002) discard;
-    gl_FragColor = vec4(accumulatedColor / accumulatedAlpha, accumulatedAlpha * 0.72);
-  }
-`;
-
-function VoronoiVolumes({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
-  const bounds = useMemo(() => {
-    const positions = [...points.map((point) => new THREE.Vector3(...point.position)), ...centroids.map((centroid) => new THREE.Vector3(...centroid))];
-    const box = new THREE.Box3().setFromPoints(positions).expandByScalar(4.2);
-    const centre = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    size.set(Math.max(size.x, 16), Math.max(size.y, 16), Math.max(size.z, 16));
-    return new THREE.Box3().setFromCenterAndSize(centre, size);
-  }, [centroids, points]);
-  const animated = useRef(Array.from({ length: 6 }, () => new THREE.Vector3()));
-  const uniforms = useMemo(() => ({
-    uCount: { value: centroids.length },
-    uCentroids: { value: animated.current },
-    uColors: { value: CLUSTER_COLORS.map((color) => new THREE.Color(color)) },
-    uBoundsMin: { value: bounds.min.clone() },
-    uBoundsMax: { value: bounds.max.clone() },
-  }), [bounds, centroids.length]);
-  const centre = bounds.getCenter(new THREE.Vector3());
-  const size = bounds.getSize(new THREE.Vector3());
-
-  useFrame((_, delta) => {
-    const damping = 1 - Math.exp(-delta * 4.6);
-    uniforms.uCount.value = centroids.length;
-    centroids.forEach((centroid, index) => {
-      const target = new THREE.Vector3(...centroid);
-      if (animated.current[index].lengthSq() === 0) animated.current[index].copy(target);
-      animated.current[index].lerp(target, damping);
+function ClusterShell({ members, index }: { members: PointDatum[]; index: number }) {
+  const effect = useMemo(() => {
+    const material = new THREE.MeshStandardMaterial({
+      color: CLUSTER_COLORS[index],
+      emissive: CLUSTER_COLORS[index],
+      emissiveIntensity: 0.08,
+      metalness: 0.04,
+      roughness: 0.28,
+      transparent: true,
+      opacity: 0.26,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
-  });
+    const mesh = new MarchingCubes(32, material, false, false, 28000);
+    mesh.isolation = 82;
+    mesh.renderOrder = -3;
+    mesh.frustumCulled = false;
+    return mesh;
+  }, [index]);
 
-  return (
-    <mesh position={centre} scale={size} renderOrder={-10} raycast={() => null} frustumCulled={false}>
-      <boxGeometry args={[1, 1, 1]} />
-      <shaderMaterial
-        vertexShader={volumeVertexShader}
-        fragmentShader={volumeFragmentShader}
-        uniforms={uniforms}
-        side={THREE.BackSide}
-        transparent
-        depthWrite={false}
-        toneMapped={false}
-      />
-    </mesh>
-  );
+  useEffect(() => {
+    if (members.length < 4) {
+      effect.geometry.setDrawRange(0, 0);
+      return;
+    }
+    const bounds = new THREE.Box3().setFromPoints(members.map((point) => new THREE.Vector3(...point.position))).expandByScalar(1.45);
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const rawSize = bounds.getSize(new THREE.Vector3());
+    const size = new THREE.Vector3(
+      Math.max(rawSize.x, 3.8),
+      Math.max(rawSize.y, 3.8),
+      Math.max(rawSize.z, 3.8),
+    );
+    bounds.setFromCenterAndSize(centre, size);
+    const minimum = bounds.min;
+    const stride = Math.max(1, Math.ceil(members.length / 78));
+    effect.reset();
+    members.forEach((point, memberIndex) => {
+      if (memberIndex % stride !== 0) return;
+      effect.addBall(
+        (point.position[0] - minimum.x) / size.x,
+        (point.position[1] - minimum.y) / size.y,
+        (point.position[2] - minimum.z) / size.z,
+        0.34,
+        13,
+      );
+    });
+    effect.position.copy(centre);
+    effect.scale.set(size.x * 0.5, size.y * 0.5, size.z * 0.5);
+    effect.update();
+  }, [effect, members]);
+
+  useEffect(() => () => {
+    effect.geometry.dispose();
+    (effect.material as THREE.Material).dispose();
+  }, [effect]);
+
+  return <primitive object={effect} />;
 }
 
 function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHover, onPlace }: {
@@ -756,9 +681,13 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
       <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
-      {showVolumes && model.centroids.length > 0 && (
-        <VoronoiVolumes key={runId} points={model.points} centroids={model.centroids} />
-      )}
+      {showVolumes && model.phase !== "ready" && model.centroids.map((_, index) => (
+        <ClusterShell
+          key={`shell-${runId}-${index}`}
+          members={model.points.filter((point) => point.cluster === index)}
+          index={index}
+        />
+      ))}
       {showVolumes && model.phase !== "ready" && model.centroids.map((centroid, index) => (
         <ClusterBoundaryTrail
           key={`boundary-${runId}-${index}`}
