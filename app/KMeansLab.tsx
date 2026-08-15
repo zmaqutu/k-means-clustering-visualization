@@ -1,6 +1,6 @@
 "use client";
 
-import { Html, Line, OrbitControls } from "@react-three/drei";
+import { Html, Line, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -36,7 +36,7 @@ type Model = {
 };
 
 const CLUSTER_COLORS = ["#76e4f7", "#f6d65f", "#fb7185", "#86efac", "#c4a7ff", "#ff9f66"];
-const NEUTRAL_COLOR = "#7890a3";
+const NEUTRAL_COLOR = "#b7c7d6";
 const CLASSIC_POINTS: Vec3[] = [
   [-7.2, 4.8, -1.6], [-7.2, -1.2, 1.2], [7.2, -2.4, -1.1], [0, 3.6, 2.4],
   [4.8, -1.2, 1.6], [2.4, -2.4, -2.2], [-9.6, -6, 0.4], [-2.4, 4.8, -1.2],
@@ -267,7 +267,7 @@ function advanceModel(model: Model): Model {
   });
   const shifts = centroids.map((centroid, index) => Math.sqrt(distanceSquared(centroid, model.centroids[index])));
   const maxShift = Math.max(...shifts);
-  const converged = maxShift < 0.008;
+  const converged = maxShift <= Number.EPSILON;
   return {
     ...model,
     centroids,
@@ -286,6 +286,7 @@ function PointCloud({ points, hovered, onHover }: {
   onHover: (id: number | null) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const glowRef = useRef<THREE.InstancedMesh>(null);
   const currentColors = useRef<THREE.Color[]>([]);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const targetColor = useMemo(() => new THREE.Color(), []);
@@ -298,22 +299,27 @@ function PointCloud({ points, hovered, onHover }: {
 
   useFrame((_, delta) => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    const glow = glowRef.current;
+    if (!mesh || !glow) return;
     const damping = 1 - Math.exp(-delta * 7);
     points.forEach((point, index) => {
       const isHovered = point.id === hovered;
       dummy.position.set(...point.position);
-      const scale = isHovered ? 1.75 : point.cluster < 0 ? 0.78 : 1;
+      const scale = isHovered ? 1.75 : point.cluster < 0 ? 0.88 : 1.08;
       dummy.scale.setScalar(scale);
       dummy.updateMatrix();
       mesh.setMatrixAt(index, dummy.matrix);
+      glow.setMatrixAt(index, dummy.matrix);
       targetColor.set(isHovered ? "#ffffff" : point.cluster < 0 ? NEUTRAL_COLOR : CLUSTER_COLORS[point.cluster]);
       if (!currentColors.current[index]) currentColors.current[index] = targetColor.clone();
       currentColors.current[index].lerp(targetColor, damping);
       mesh.setColorAt(index, currentColors.current[index]);
+      glow.setColorAt(index, currentColors.current[index]);
     });
     mesh.instanceMatrix.needsUpdate = true;
+    glow.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (glow.instanceColor) glow.instanceColor.needsUpdate = true;
   });
 
   const handlePointer = (event: ThreeEvent<PointerEvent>) => {
@@ -322,15 +328,32 @@ function PointCloud({ points, hovered, onHover }: {
   };
 
   return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, points.length]}
-      onPointerMove={handlePointer}
-      onPointerOut={() => onHover(null)}
-    >
-      <sphereGeometry args={[0.26, 12, 12]} />
-      <meshStandardMaterial roughness={0.42} metalness={0.08} vertexColors />
-    </instancedMesh>
+    <group>
+      <instancedMesh
+        ref={glowRef}
+        args={[undefined, undefined, points.length]}
+        raycast={() => null}
+      >
+        <sphereGeometry args={[0.4, 10, 10]} />
+        <meshBasicMaterial
+          vertexColors
+          toneMapped={false}
+          transparent
+          opacity={0.16}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </instancedMesh>
+      <instancedMesh
+        ref={meshRef}
+        args={[undefined, undefined, points.length]}
+        onPointerMove={handlePointer}
+        onPointerOut={() => onHover(null)}
+      >
+        <sphereGeometry args={[0.29, 14, 14]} />
+        <meshBasicMaterial vertexColors toneMapped={false} />
+      </instancedMesh>
+    </group>
   );
 }
 
@@ -345,6 +368,24 @@ function AnimatedCentroid({ position, index }: { position: Vec3; index: number }
 
   return (
     <group ref={group} position={position}>
+      <Trail
+        width={3.4}
+        length={12}
+        decay={1.15}
+        stride={0.012}
+        color={CLUSTER_COLORS[index]}
+        attenuation={(t) => t * t}
+      >
+        <mesh raycast={() => null}>
+          <sphereGeometry args={[0.22, 12, 12]} />
+          <meshBasicMaterial
+            color={CLUSTER_COLORS[index]}
+            toneMapped={false}
+            transparent
+            opacity={0.9}
+          />
+        </mesh>
+      </Trail>
       <mesh>
         <octahedronGeometry args={[0.62, 0]} />
         <meshStandardMaterial
@@ -396,27 +437,105 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
   );
 }
 
-function ClusterVolumes({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
+function ClusterHalo({ centroid, radius, index }: { centroid: Vec3; radius: number; index: number }) {
+  const group = useRef<THREE.Group>(null);
+  const currentRadius = useRef(radius);
+  const target = useMemo(() => new THREE.Vector3(...centroid), [centroid]);
+
+  useFrame(({ clock }, delta) => {
+    if (!group.current) return;
+    group.current.position.lerp(target, 1 - Math.exp(-delta * 3.4));
+    currentRadius.current = THREE.MathUtils.damp(currentRadius.current, radius, 3.4, delta);
+    const pulse = 1 + Math.sin(clock.elapsedTime * 1.25 + index) * 0.018;
+    group.current.scale.setScalar(currentRadius.current * pulse);
+    group.current.rotation.y += delta * (0.05 + index * 0.008);
+  });
+
+  return (
+    <group ref={group} position={centroid} scale={radius}>
+      <mesh raycast={() => null}>
+        <sphereGeometry args={[1, 28, 18]} />
+        <meshBasicMaterial
+          color={CLUSTER_COLORS[index]}
+          side={THREE.BackSide}
+          transparent
+          opacity={0.055}
+          depthWrite={false}
+          toneMapped={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
+      <mesh raycast={() => null}>
+        <sphereGeometry args={[1.015, 18, 12]} />
+        <meshBasicMaterial
+          color={CLUSTER_COLORS[index]}
+          wireframe
+          transparent
+          opacity={0.11}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
+        <torusGeometry args={[1.035, 0.009, 6, 80]} />
+        <meshBasicMaterial color={CLUSTER_COLORS[index]} transparent opacity={0.36} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh rotation={[0.72, 0.25, 0.58]} raycast={() => null}>
+        <torusGeometry args={[1.05, 0.007, 6, 80]} />
+        <meshBasicMaterial color={CLUSTER_COLORS[index]} transparent opacity={0.22} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh rotation={[-0.46, 0.92, -0.2]} raycast={() => null}>
+        <torusGeometry args={[1.025, 0.006, 6, 80]} />
+        <meshBasicMaterial color={CLUSTER_COLORS[index]} transparent opacity={0.16} depthWrite={false} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function ClusterHalos({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
   return (
     <>
       {centroids.map((centroid, index) => {
         const members = points.filter((point) => point.cluster === index);
-        const rms = members.length
-          ? Math.sqrt(members.reduce((sum, point) => sum + distanceSquared(point.position, centroid), 0) / members.length)
-          : 1;
+        const distances = members
+          .map((point) => Math.sqrt(distanceSquared(point.position, centroid)))
+          .sort((left, right) => left - right);
+        const percentileIndex = Math.min(distances.length - 1, Math.floor(distances.length * 0.82));
+        const radius = distances.length ? Math.max(1.45, distances[percentileIndex] + 0.55) : 1.45;
         return (
-          <mesh key={index} position={centroid} scale={Math.max(1, rms)}>
-            <sphereGeometry args={[1, 18, 12]} />
-            <meshBasicMaterial
-              color={CLUSTER_COLORS[index]}
-              wireframe
-              transparent
-              opacity={0.075}
-              depthWrite={false}
-            />
-          </mesh>
+          <ClusterHalo key={index} centroid={centroid} radius={radius} index={index} />
         );
       })}
+    </>
+  );
+}
+
+function CentroidHistory({ points, index }: { points: Vec3[]; index: number }) {
+  if (points.length < 2) return null;
+  return (
+    <>
+      <Line
+        points={points}
+        color={CLUSTER_COLORS[index]}
+        lineWidth={8}
+        transparent
+        opacity={0.1}
+        raycast={() => null}
+      />
+      <Line
+        points={points}
+        color={CLUSTER_COLORS[index]}
+        lineWidth={2.2}
+        transparent
+        opacity={0.74}
+        raycast={() => null}
+      />
+      {points.slice(0, -1).map((point, pointIndex) => (
+        <mesh key={pointIndex} position={point} raycast={() => null}>
+          <sphereGeometry args={[0.1, 8, 8]} />
+          <meshBasicMaterial color={CLUSTER_COLORS[index]} toneMapped={false} transparent opacity={0.72} />
+        </mesh>
+      ))}
     </>
   );
 }
@@ -439,9 +558,9 @@ function Scene({ model, hovered, showLinks, showVolumes, autoRotate, onHover }: 
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
       <PointCloud points={model.points} hovered={hovered} onHover={onHover} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
-      {showVolumes && model.phase !== "ready" && <ClusterVolumes points={model.points} centroids={model.centroids} />}
-      {model.trails.map((trail, index) => trail.length > 1 && (
-        <Line key={index} points={trail} color={CLUSTER_COLORS[index]} lineWidth={1.2} transparent opacity={0.56} />
+      {showVolumes && model.phase !== "ready" && <ClusterHalos points={model.points} centroids={model.centroids} />}
+      {model.trails.map((trail, index) => (
+        <CentroidHistory key={index} points={trail} index={index} />
       ))}
       {model.centroids.map((centroid, index) => (
         <AnimatedCentroid key={index} position={centroid} index={index} />
@@ -628,10 +747,23 @@ export default function KMeansLab() {
         </label>
 
         <div className="layer-controls" aria-label="Scene layers">
-          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="Cluster fields" />
+          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="Group halos" />
           <Switch checked={showLinks} onChange={() => setShowLinks((value) => !value)} label="Distance lines" />
           <Switch checked={autoRotate} onChange={() => setAutoRotate((value) => !value)} label="Auto orbit" />
         </div>
+
+        <button
+          type="button"
+          className={`auto-run-button ${isPlaying ? "is-running" : ""}`}
+          onClick={() => setIsPlaying((playing) => !playing)}
+          disabled={model.phase === "converged"}
+        >
+          <i aria-hidden="true">{isPlaying ? "Ⅱ" : "▶"}</i>
+          <span>
+            <strong>{isPlaying ? "Pause autoplay" : "Run to convergence"}</strong>
+            <small>{isPlaying ? "Following every centroid move" : "Play every step until all means settle"}</small>
+          </span>
+        </button>
 
         <div className="secondary-actions">
           <button type="button" onClick={() => rebuild(config)}>Reset</button>
@@ -692,8 +824,8 @@ export default function KMeansLab() {
           {isPlaying ? "Ⅱ" : "▶"}
         </button>
         <div className="playback-copy">
-          <span>{model.phase === "converged" ? "Complete" : "Next step"}</span>
-          <strong>{model.phase === "converged" ? "No further movement" : nextAction}</strong>
+          <span>{model.phase === "converged" ? "Complete" : isPlaying ? "Autoplay running" : "Next step"}</span>
+          <strong>{model.phase === "converged" ? "Exact cluster means found" : isPlaying ? `${nextAction} · until stable` : nextAction}</strong>
         </div>
         <div className="event-track" aria-hidden="true">
           {model.events.slice(-7).map((event, index) => (
