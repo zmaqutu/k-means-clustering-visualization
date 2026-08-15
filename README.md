@@ -9,7 +9,7 @@ An interactive Three.js visualization of the K-means clustering algorithm. The l
 - Compare random, farthest-point, and K-means++ initialization.
 - Change K from 2–6 and generate up to 600 observations.
 - Explore compact and unequal Gaussian groups, anisotropic ribbons, interlocking moons, overlapping currents, concentric shells, uniform noise, or the original eight Python points.
-- Toggle the softly ray-marched 3D Voronoi field, point-to-centroid distance lines, and camera orbiting.
+- Toggle the softly ray-marched 3D Voronoi field with luminous boundary membranes, point-to-centroid distance lines, and camera orbiting.
 - Clear centroid seeds and place them manually on observations, or add genuinely random seeds one at a time.
 - Watch inertia, moved points, centroid shift, cluster sizes, and centroid trails update live.
 

@@ -613,13 +613,19 @@ const volumeFragmentShader = `
         runnerUpColor = closestColor;
       }
       float boundaryGap = max(sqrt(runnerUp) - sqrt(closest), 0.0);
-      float boundaryBlend = 0.5 * (1.0 - smoothstep(0.0, 2.2, boundaryGap));
-      vec3 sampleColor = mix(closestColor, runnerUpColor, boundaryBlend);
+      float boundaryBlend = 0.5 * (1.0 - smoothstep(0.0, 2.4, boundaryGap));
+      float boundaryCore = 1.0 - smoothstep(0.15, 0.78, boundaryGap);
+      float boundaryHalo = 1.0 - smoothstep(0.45, 1.65, boundaryGap);
+      vec3 blendedRegion = mix(closestColor, runnerUpColor, boundaryBlend);
+      vec3 membraneColor = mix(mix(closestColor, runnerUpColor, 0.5), vec3(1.0), 0.18);
+      vec3 sampleColor = mix(blendedRegion, membraneColor, boundaryHalo * 0.72);
       vec3 edgeDistances = min(samplePosition - uBoundsMin, uBoundsMax - samplePosition);
       float edgeDistance = min(min(edgeDistances.x, edgeDistances.y), edgeDistances.z);
       float exteriorFeather = smoothstep(0.0, 3.4, edgeDistance);
       float proximity = exp(-closest * 0.012);
-      float sampleAlpha = exteriorFeather * (0.0035 + proximity * 0.0145);
+      float sampleAlpha = exteriorFeather * (
+        0.0032 + proximity * 0.0128 + boundaryHalo * 0.009 + boundaryCore * 0.038
+      );
       float contribution = (1.0 - accumulatedAlpha) * sampleAlpha;
       accumulatedColor += sampleColor * contribution;
       accumulatedAlpha += contribution;
