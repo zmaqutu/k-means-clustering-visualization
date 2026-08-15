@@ -16,8 +16,10 @@
 <br />
 
 <p align="center">
-  <img src="./public/og.png" width="100%" alt="K-Means 3D Lab cover showing four luminous clusters in a three-dimensional coordinate space" />
+  <img src="./readmeAssets/clustering-3d-lab-banner.png" width="100%" alt="Clustering 3D Lab cover depicting K-means, K-medoids, DBSCAN, and Gaussian mixture clustering in a luminous three-dimensional coordinate space" />
 </p>
+
+<p align="center"><em>Centroids, medoids, density-connected regions, noise, and probabilistic Gaussian components—all in one spatial laboratory.</em></p>
 
 ## Live demo
 
@@ -26,8 +28,10 @@ Explore the production version at **[zmaqutu.github.io/k-means-clustering-visual
 Clustering 3D Lab turns four foundational clustering methods into a spatial experiment. Compare their assumptions on the same datasets, run an algorithm automatically, advance it one operation at a time, inspect observations, and deliberately test each method on geometry it handles poorly.
 
 <p align="center">
-  <img src="./readmeAssets/interactive-lab.png" width="100%" alt="Interactive K-Means 3D Lab showing a converged double-helix dataset, controls, cluster hulls, and live diagnostics" />
+  <img src="./readmeAssets/kmeans-mode-interface.png" width="100%" alt="Clustering 3D Lab in K-means mode showing a converged double-helix dataset, controls, cluster hulls, and live diagnostics" />
 </p>
+
+<p align="center"><sub>K-means mode on the double-helix dataset. The same laboratory also runs K-medoids, DBSCAN, and Gaussian mixture models.</sub></p>
 
 ## Highlights
 

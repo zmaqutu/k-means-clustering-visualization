@@ -1389,7 +1389,7 @@ export default function KMeansLab() {
           className={mobilePanel === "controls" ? "is-active" : ""}
           onClick={() => setMobilePanel((current) => current === "controls" ? null : "controls")}
           aria-expanded={mobilePanel === "controls"}
-          aria-controls="kmeans-controls"
+          aria-controls="clustering-controls"
         >
           <span className="mobile-burger" aria-hidden="true"><i /><i /><i /></span>
           Controls
@@ -1399,14 +1399,14 @@ export default function KMeansLab() {
           className={mobilePanel === "insights" ? "is-active" : ""}
           onClick={() => setMobilePanel((current) => current === "insights" ? null : "insights")}
           aria-expanded={mobilePanel === "insights"}
-          aria-controls="kmeans-insights"
+          aria-controls="clustering-insights"
         >
           <span className="mobile-stats-icon" aria-hidden="true"><i /><i /><i /></span>
           Stats
         </button>
       </nav>
 
-      <section id="kmeans-controls" className="control-panel" aria-label="Clustering controls">
+      <section id="clustering-controls" className="control-panel" aria-label="Clustering controls">
         <button type="button" className="mobile-panel-close" onClick={() => setMobilePanel(null)} aria-label="Close controls">×</button>
         <header className="panel-header">
           <div className="brand-mark" aria-hidden="true"><i /><i /><i /></div>
@@ -1559,7 +1559,7 @@ export default function KMeansLab() {
         <strong>{status.title}</strong>
       </div>
 
-      <aside id="kmeans-insights" className="insight-rail" aria-label="Algorithm explanation and metrics">
+      <aside id="clustering-insights" className="insight-rail" aria-label="Algorithm explanation and metrics">
         <button type="button" className="mobile-panel-close" onClick={() => setMobilePanel(null)} aria-label="Close diagnostics">×</button>
         <section className="insight-card primary-insight">
           <div className="card-heading">

@@ -29,13 +29,13 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Clustering 3D Lab visualization" }],
+      images: [{ url: "/og-clustering-3d-lab.png", width: 1792, height: 896, alt: "Clustering 3D Lab algorithm visualization" }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/og.png"],
+      images: ["/og-clustering-3d-lab.png"],
     },
   };
 }

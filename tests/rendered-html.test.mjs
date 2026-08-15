@@ -7,8 +7,8 @@ async function render() {
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("https://kmeans.example/", {
-      headers: { accept: "text/html", host: "kmeans.example", "x-forwarded-proto": "https" },
+    new Request("https://clustering.example/", {
+      headers: { accept: "text/html", host: "clustering.example", "x-forwarded-proto": "https" },
     }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
@@ -24,7 +24,7 @@ test("server-renders the clustering lab shell and share metadata", async () => {
   assert.match(html, /<title>Clustering 3D Lab<\/title>/i);
   assert.match(html, /interactive Three\.js laboratory/i);
   assert.match(html, /property="og:image"/i);
-  assert.match(html, /content="https:\/\/kmeans\.example\/og\.png"/i);
+  assert.match(html, /content="https:\/\/clustering\.example\/og-clustering-3d-lab\.png"/i);
   assert.match(html, /name="twitter:card"/i);
   assert.match(html, /content="summary_large_image"/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
