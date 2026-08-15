@@ -1,9 +1,10 @@
 "use client";
 
-import { Html, OrbitControls, Trail } from "@react-three/drei";
+import { Edges, Html, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 type Vec3 = [number, number, number];
 type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
@@ -547,79 +548,120 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
   );
 }
 
-const fieldVertexShader = `
-  varying vec3 vWorldPosition;
+const volumeVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewDirection;
 
   void main() {
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = worldPosition.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    vNormal = normalize(normalMatrix * normal);
+    vViewDirection = normalize(-viewPosition.xyz);
+    gl_Position = projectionMatrix * viewPosition;
   }
 `;
 
-const fieldFragmentShader = `
-  uniform int uCount;
-  uniform vec3 uCentroids[6];
-  uniform vec3 uColors[6];
-  varying vec3 vWorldPosition;
+const volumeFragmentShader = `
+  uniform vec3 uColor;
+  varying vec3 vNormal;
+  varying vec3 vViewDirection;
 
   void main() {
-    float closest = 100000.0;
-    float second = 100000.0;
-    vec3 color = vec3(0.08, 0.12, 0.16);
-
-    for (int i = 0; i < 6; i++) {
-      if (i >= uCount) break;
-      vec2 delta = vWorldPosition.xz - uCentroids[i].xz;
-      float distanceToSeed = dot(delta, delta);
-      if (distanceToSeed < closest) {
-        second = closest;
-        closest = distanceToSeed;
-        color = uColors[i];
-      } else if (distanceToSeed < second) {
-        second = distanceToSeed;
-      }
-    }
-
-    float boundary = uCount > 1
-      ? 1.0 - smoothstep(0.0, 0.95, sqrt(second) - sqrt(closest))
-      : 0.0;
-    vec3 fieldColor = mix(color * 0.64, color, boundary * 0.42);
-    gl_FragColor = vec4(fieldColor, 0.19 + boundary * 0.09);
+    float facing = abs(dot(normalize(vNormal), normalize(vViewDirection)));
+    float fresnel = pow(1.0 - facing, 2.1);
+    gl_FragColor = vec4(uColor, 0.022 + fresnel * 0.095);
   }
 `;
 
-function DecisionField({ centroids }: { centroids: Vec3[] }) {
-  const animated = useRef(Array.from({ length: 6 }, () => new THREE.Vector3()));
-  const uniforms = useMemo(() => ({
-    uCount: { value: centroids.length },
-    uCentroids: { value: animated.current },
-    uColors: { value: CLUSTER_COLORS.map((color) => new THREE.Color(color)) },
-  }), []);
+type HalfSpace = { normal: THREE.Vector3; constant: number };
 
-  useFrame((_, delta) => {
-    uniforms.uCount.value = centroids.length;
-    const damping = 1 - Math.exp(-delta * 4.6);
-    centroids.forEach((centroid, index) => {
-      const target = new THREE.Vector3(...centroid);
-      if (animated.current[index].lengthSq() === 0) animated.current[index].copy(target);
-      animated.current[index].lerp(target, damping);
-    });
+function intersectPlanes(a: HalfSpace, b: HalfSpace, c: HalfSpace) {
+  const matrix = new THREE.Matrix3().set(
+    a.normal.x, a.normal.y, a.normal.z,
+    b.normal.x, b.normal.y, b.normal.z,
+    c.normal.x, c.normal.y, c.normal.z,
+  );
+  if (Math.abs(matrix.determinant()) < 1e-7) return null;
+  return new THREE.Vector3(a.constant, b.constant, c.constant).applyMatrix3(matrix.invert());
+}
+
+function buildVoronoiCell(index: number, centroids: Vec3[], bounds: THREE.Box3) {
+  const centre = new THREE.Vector3(...centroids[index]);
+  const planes: HalfSpace[] = [
+    { normal: new THREE.Vector3(1, 0, 0), constant: bounds.max.x },
+    { normal: new THREE.Vector3(-1, 0, 0), constant: -bounds.min.x },
+    { normal: new THREE.Vector3(0, 1, 0), constant: bounds.max.y },
+    { normal: new THREE.Vector3(0, -1, 0), constant: -bounds.min.y },
+    { normal: new THREE.Vector3(0, 0, 1), constant: bounds.max.z },
+    { normal: new THREE.Vector3(0, 0, -1), constant: -bounds.min.z },
+  ];
+
+  centroids.forEach((otherCentroid, otherIndex) => {
+    if (otherIndex === index) return;
+    const other = new THREE.Vector3(...otherCentroid);
+    const normal = other.clone().sub(centre);
+    if (normal.lengthSq() < 1e-8) return;
+    planes.push({ normal, constant: (other.lengthSq() - centre.lengthSq()) * 0.5 });
   });
 
-  if (centroids.length === 0) return null;
+  const vertices: THREE.Vector3[] = [];
+  const seen = new Set<string>();
+  for (let a = 0; a < planes.length - 2; a += 1) {
+    for (let b = a + 1; b < planes.length - 1; b += 1) {
+      for (let c = b + 1; c < planes.length; c += 1) {
+        const vertex = intersectPlanes(planes[a], planes[b], planes[c]);
+        if (!vertex || planes.some((plane) => plane.normal.dot(vertex) > plane.constant + 1e-4)) continue;
+        const key = `${Math.round(vertex.x * 1000)}:${Math.round(vertex.y * 1000)}:${Math.round(vertex.z * 1000)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          vertices.push(vertex);
+        }
+      }
+    }
+  }
+  return vertices.length >= 4 ? new ConvexGeometry(vertices) : null;
+}
+
+function VoronoiCell({ index, centroids, bounds }: { index: number; centroids: Vec3[]; bounds: THREE.Box3 }) {
+  const geometry = useMemo(() => buildVoronoiCell(index, centroids, bounds), [bounds, centroids, index]);
+  const uniforms = useMemo(() => ({
+    uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) },
+  }), [index]);
+
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  if (!geometry) return null;
   return (
-    <mesh rotation-x={-Math.PI / 2} position={[0, -11.53, 0]} renderOrder={-3} raycast={() => null}>
-      <planeGeometry args={[58, 58]} />
+    <mesh geometry={geometry} renderOrder={-2 + index * 0.01} raycast={() => null}>
       <shaderMaterial
-        vertexShader={fieldVertexShader}
-        fragmentShader={fieldFragmentShader}
+        vertexShader={volumeVertexShader}
+        fragmentShader={volumeFragmentShader}
         uniforms={uniforms}
         transparent
         depthWrite={false}
+        side={THREE.DoubleSide}
         toneMapped={false}
+        blending={THREE.AdditiveBlending}
       />
+      <Edges threshold={8} color={CLUSTER_COLORS[index]} transparent opacity={0.2} />
     </mesh>
+  );
+}
+
+function VoronoiVolumes({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
+  const bounds = useMemo(() => {
+    const positions = [...points.map((point) => new THREE.Vector3(...point.position)), ...centroids.map((centroid) => new THREE.Vector3(...centroid))];
+    const box = new THREE.Box3().setFromPoints(positions).expandByScalar(2.4);
+    const centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    size.set(Math.max(size.x, 12), Math.max(size.y, 12), Math.max(size.z, 12));
+    return new THREE.Box3().setFromCenterAndSize(centre, size);
+  }, [centroids, points]);
+
+  return (
+    <>
+      {centroids.map((_, index) => (
+        <VoronoiCell key={index} index={index} centroids={centroids} bounds={bounds} />
+      ))}
+    </>
   );
 }
 
@@ -643,7 +685,9 @@ function Scene({ model, runId, hovered, showLinks, showVolumes, autoRotate, onHo
       <pointLight position={[-12, -4, -10]} intensity={32} color="#76e4f7" />
       <PointCloud points={model.points} hovered={hovered} onHover={onHover} onPlace={onPlace} />
       {showLinks && model.phase !== "ready" && <ConnectionLines points={model.points} centroids={model.centroids} />}
-      {showVolumes && <DecisionField key={runId} centroids={model.centroids} />}
+      {showVolumes && model.centroids.length > 0 && (
+        <VoronoiVolumes key={runId} points={model.points} centroids={model.centroids} />
+      )}
       {model.centroids.map((centroid, index) => (
         <AnimatedCentroid key={`${runId}-${index}`} position={centroid} index={index} />
       ))}
@@ -918,7 +962,7 @@ export default function KMeansLab() {
         </div>
 
         <div className="layer-controls" aria-label="Scene layers">
-          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="Decision field" />
+          <Switch checked={showVolumes} onChange={() => setShowVolumes((value) => !value)} label="3D regions" />
           <Switch checked={showLinks} onChange={() => setShowLinks((value) => !value)} label="Distance lines" />
           <Switch checked={autoRotate} onChange={() => setAutoRotate((value) => !value)} label="Auto orbit" />
         </div>
