@@ -1,10 +1,9 @@
 "use client";
 
-import { Edges, Html, OrbitControls, Trail } from "@react-three/drei";
+import { Html, OrbitControls, Trail } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 type Vec3 = [number, number, number];
 type DatasetId = "classic" | "gaussian" | "varied" | "anisotropic" | "overlap" | "moons" | "shells" | "noise";
@@ -549,119 +548,132 @@ function ConnectionLines({ points, centroids }: { points: PointDatum[]; centroid
 }
 
 const volumeVertexShader = `
-  varying vec3 vNormal;
-  varying vec3 vViewDirection;
+  varying vec3 vWorldPosition;
 
   void main() {
-    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-    vNormal = normalize(normalMatrix * normal);
-    vViewDirection = normalize(-viewPosition.xyz);
-    gl_Position = projectionMatrix * viewPosition;
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
   }
 `;
 
 const volumeFragmentShader = `
-  uniform vec3 uColor;
-  varying vec3 vNormal;
-  varying vec3 vViewDirection;
+  uniform int uCount;
+  uniform vec3 uCentroids[6];
+  uniform vec3 uColors[6];
+  uniform vec3 uBoundsMin;
+  uniform vec3 uBoundsMax;
+  varying vec3 vWorldPosition;
 
   void main() {
-    float facing = abs(dot(normalize(vNormal), normalize(vViewDirection)));
-    float fresnel = pow(1.0 - facing, 2.1);
-    gl_FragColor = vec4(uColor, 0.022 + fresnel * 0.095);
-  }
-`;
+    vec3 rayDirection = normalize(vWorldPosition - cameraPosition);
+    vec3 safeDirection = vec3(
+      abs(rayDirection.x) < 0.0001 ? 0.0001 : rayDirection.x,
+      abs(rayDirection.y) < 0.0001 ? 0.0001 : rayDirection.y,
+      abs(rayDirection.z) < 0.0001 ? 0.0001 : rayDirection.z
+    );
+    vec3 inverseDirection = 1.0 / safeDirection;
+    vec3 first = (uBoundsMin - cameraPosition) * inverseDirection;
+    vec3 second = (uBoundsMax - cameraPosition) * inverseDirection;
+    vec3 nearPlane = min(first, second);
+    vec3 farPlane = max(first, second);
+    float nearDistance = max(max(nearPlane.x, nearPlane.y), max(nearPlane.z, 0.0));
+    float farDistance = min(min(farPlane.x, farPlane.y), farPlane.z);
+    if (farDistance <= nearDistance) discard;
 
-type HalfSpace = { normal: THREE.Vector3; constant: number };
+    vec3 accumulatedColor = vec3(0.0);
+    float accumulatedAlpha = 0.0;
+    float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 
-function intersectPlanes(a: HalfSpace, b: HalfSpace, c: HalfSpace) {
-  const matrix = new THREE.Matrix3().set(
-    a.normal.x, a.normal.y, a.normal.z,
-    b.normal.x, b.normal.y, b.normal.z,
-    c.normal.x, c.normal.y, c.normal.z,
-  );
-  if (Math.abs(matrix.determinant()) < 1e-7) return null;
-  return new THREE.Vector3(a.constant, b.constant, c.constant).applyMatrix3(matrix.invert());
-}
+    for (int step = 0; step < 48; step++) {
+      float progress = (float(step) + jitter) / 48.0;
+      vec3 samplePosition = cameraPosition + rayDirection * mix(nearDistance, farDistance, progress);
+      float closest = 100000.0;
+      float runnerUp = 100000.0;
+      vec3 closestColor = vec3(0.2);
+      vec3 runnerUpColor = vec3(0.2);
 
-function buildVoronoiCell(index: number, centroids: Vec3[], bounds: THREE.Box3) {
-  const centre = new THREE.Vector3(...centroids[index]);
-  const planes: HalfSpace[] = [
-    { normal: new THREE.Vector3(1, 0, 0), constant: bounds.max.x },
-    { normal: new THREE.Vector3(-1, 0, 0), constant: -bounds.min.x },
-    { normal: new THREE.Vector3(0, 1, 0), constant: bounds.max.y },
-    { normal: new THREE.Vector3(0, -1, 0), constant: -bounds.min.y },
-    { normal: new THREE.Vector3(0, 0, 1), constant: bounds.max.z },
-    { normal: new THREE.Vector3(0, 0, -1), constant: -bounds.min.z },
-  ];
-
-  centroids.forEach((otherCentroid, otherIndex) => {
-    if (otherIndex === index) return;
-    const other = new THREE.Vector3(...otherCentroid);
-    const normal = other.clone().sub(centre);
-    if (normal.lengthSq() < 1e-8) return;
-    planes.push({ normal, constant: (other.lengthSq() - centre.lengthSq()) * 0.5 });
-  });
-
-  const vertices: THREE.Vector3[] = [];
-  const seen = new Set<string>();
-  for (let a = 0; a < planes.length - 2; a += 1) {
-    for (let b = a + 1; b < planes.length - 1; b += 1) {
-      for (let c = b + 1; c < planes.length; c += 1) {
-        const vertex = intersectPlanes(planes[a], planes[b], planes[c]);
-        if (!vertex || planes.some((plane) => plane.normal.dot(vertex) > plane.constant + 1e-4)) continue;
-        const key = `${Math.round(vertex.x * 1000)}:${Math.round(vertex.y * 1000)}:${Math.round(vertex.z * 1000)}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          vertices.push(vertex);
+      for (int i = 0; i < 6; i++) {
+        if (i >= uCount) break;
+        vec3 delta = samplePosition - uCentroids[i];
+        float distanceToCentroid = dot(delta, delta);
+        if (distanceToCentroid < closest) {
+          runnerUp = closest;
+          runnerUpColor = closestColor;
+          closest = distanceToCentroid;
+          closestColor = uColors[i];
+        } else if (distanceToCentroid < runnerUp) {
+          runnerUp = distanceToCentroid;
+          runnerUpColor = uColors[i];
         }
       }
+
+      if (uCount == 1) {
+        runnerUp = closest;
+        runnerUpColor = closestColor;
+      }
+      float boundaryGap = max(sqrt(runnerUp) - sqrt(closest), 0.0);
+      float boundaryBlend = 0.5 * (1.0 - smoothstep(0.0, 2.2, boundaryGap));
+      vec3 sampleColor = mix(closestColor, runnerUpColor, boundaryBlend);
+      vec3 edgeDistances = min(samplePosition - uBoundsMin, uBoundsMax - samplePosition);
+      float edgeDistance = min(min(edgeDistances.x, edgeDistances.y), edgeDistances.z);
+      float exteriorFeather = smoothstep(0.0, 3.4, edgeDistance);
+      float proximity = exp(-closest * 0.012);
+      float sampleAlpha = exteriorFeather * (0.0035 + proximity * 0.0145);
+      float contribution = (1.0 - accumulatedAlpha) * sampleAlpha;
+      accumulatedColor += sampleColor * contribution;
+      accumulatedAlpha += contribution;
+      if (accumulatedAlpha > 0.72) break;
     }
+
+    if (accumulatedAlpha < 0.002) discard;
+    gl_FragColor = vec4(accumulatedColor / accumulatedAlpha, accumulatedAlpha * 0.72);
   }
-  return vertices.length >= 4 ? new ConvexGeometry(vertices) : null;
-}
-
-function VoronoiCell({ index, centroids, bounds }: { index: number; centroids: Vec3[]; bounds: THREE.Box3 }) {
-  const geometry = useMemo(() => buildVoronoiCell(index, centroids, bounds), [bounds, centroids, index]);
-  const uniforms = useMemo(() => ({
-    uColor: { value: new THREE.Color(CLUSTER_COLORS[index]) },
-  }), [index]);
-
-  useEffect(() => () => geometry?.dispose(), [geometry]);
-  if (!geometry) return null;
-  return (
-    <mesh geometry={geometry} renderOrder={-2 + index * 0.01} raycast={() => null}>
-      <shaderMaterial
-        vertexShader={volumeVertexShader}
-        fragmentShader={volumeFragmentShader}
-        uniforms={uniforms}
-        transparent
-        depthWrite={false}
-        side={THREE.DoubleSide}
-        toneMapped={false}
-        blending={THREE.AdditiveBlending}
-      />
-      <Edges threshold={8} color={CLUSTER_COLORS[index]} transparent opacity={0.2} />
-    </mesh>
-  );
-}
+`;
 
 function VoronoiVolumes({ points, centroids }: { points: PointDatum[]; centroids: Vec3[] }) {
   const bounds = useMemo(() => {
     const positions = [...points.map((point) => new THREE.Vector3(...point.position)), ...centroids.map((centroid) => new THREE.Vector3(...centroid))];
-    const box = new THREE.Box3().setFromPoints(positions).expandByScalar(2.4);
+    const box = new THREE.Box3().setFromPoints(positions).expandByScalar(4.2);
     const centre = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
-    size.set(Math.max(size.x, 12), Math.max(size.y, 12), Math.max(size.z, 12));
+    size.set(Math.max(size.x, 16), Math.max(size.y, 16), Math.max(size.z, 16));
     return new THREE.Box3().setFromCenterAndSize(centre, size);
   }, [centroids, points]);
+  const animated = useRef(Array.from({ length: 6 }, () => new THREE.Vector3()));
+  const uniforms = useMemo(() => ({
+    uCount: { value: centroids.length },
+    uCentroids: { value: animated.current },
+    uColors: { value: CLUSTER_COLORS.map((color) => new THREE.Color(color)) },
+    uBoundsMin: { value: bounds.min.clone() },
+    uBoundsMax: { value: bounds.max.clone() },
+  }), [bounds, centroids.length]);
+  const centre = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+
+  useFrame((_, delta) => {
+    const damping = 1 - Math.exp(-delta * 4.6);
+    uniforms.uCount.value = centroids.length;
+    centroids.forEach((centroid, index) => {
+      const target = new THREE.Vector3(...centroid);
+      if (animated.current[index].lengthSq() === 0) animated.current[index].copy(target);
+      animated.current[index].lerp(target, damping);
+    });
+  });
 
   return (
-    <>
-      {centroids.map((_, index) => (
-        <VoronoiCell key={index} index={index} centroids={centroids} bounds={bounds} />
-      ))}
-    </>
+    <mesh position={centre} scale={size} renderOrder={-10} raycast={() => null} frustumCulled={false}>
+      <boxGeometry args={[1, 1, 1]} />
+      <shaderMaterial
+        vertexShader={volumeVertexShader}
+        fragmentShader={volumeFragmentShader}
+        uniforms={uniforms}
+        side={THREE.BackSide}
+        transparent
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </mesh>
   );
 }
 
@@ -760,10 +772,6 @@ export default function KMeansLab() {
   }, [isPlaying, model.phase, readyToRun, step]);
 
   useEffect(() => {
-    if (isSeeding && readyToRun) setIsSeeding(false);
-  }, [isSeeding, readyToRun]);
-
-  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (["INPUT", "SELECT", "BUTTON"].includes(target.tagName)) return;
@@ -771,7 +779,10 @@ export default function KMeansLab() {
         event.preventDefault();
         step();
       } else if (event.key.toLowerCase() === "a") {
-        setIsPlaying((playing) => !playing);
+        if (readyToRun && model.phase !== "converged") {
+          setIsSeeding(false);
+          setIsPlaying((playing) => !playing);
+        }
       } else if (event.key.toLowerCase() === "r") {
         setIsPlaying(false);
         setRunId((current) => current + 1);
@@ -781,7 +792,7 @@ export default function KMeansLab() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [config, seed, step]);
+  }, [config, model.phase, readyToRun, seed, step]);
 
   const rebuild = (nextConfig: Config, nextSeed = seed) => {
     setIsPlaying(false);
@@ -822,44 +833,55 @@ export default function KMeansLab() {
 
   const placeCentroid = useCallback((position: Vec3) => {
     if (!isSeeding) return;
-    setModel((current) => {
-      if (current.centroids.length >= config.k) return current;
-      const duplicate = current.centroids.some((centroid) => distanceSquared(centroid, position) < 0.0001);
-      if (duplicate) return current;
-      const centroids = [...current.centroids, [...position] as Vec3];
-      return {
-        ...current,
-        centroids,
-        events: [...current.events, `Centroid ${centroids.length} placed manually`],
-      };
+    if (model.centroids.length >= config.k) return;
+    const duplicate = model.centroids.some((centroid) => distanceSquared(centroid, position) < 0.0001);
+    if (duplicate) return;
+    const centroids = [...model.centroids, [...position] as Vec3];
+    const complete = centroids.length === config.k;
+    setIsSeeding(!complete);
+    setModel({
+      ...model,
+      points: model.points.map((point) => ({ ...point, cluster: -1 })),
+      centroids,
+      phase: "ready",
+      iteration: 0,
+      moved: 0,
+      maxShift: 0,
+      inertia: 0,
+      events: [...model.events, complete ? "All manual seeds placed · ready to run" : `Centroid ${centroids.length} placed manually`],
     });
-  }, [config.k, isSeeding]);
+  }, [config.k, isSeeding, model]);
 
   const addRandomCentroid = () => {
     setIsPlaying(false);
     setHovered(null);
     if (model.centroids.length >= config.k) setRunId((current) => current + 1);
-    setIsSeeding(true);
-    setModel((current) => {
-      const centroids = current.centroids.length >= config.k ? [] : current.centroids;
-      const candidates = current.points.filter((point) => (
-        !centroids.some((centroid) => distanceSquared(centroid, point.position) < 0.0001)
-      ));
-      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-      if (!chosen) return current;
-      const nextCentroids = [...centroids, [...chosen.position] as Vec3];
-      return {
-        ...current,
-        points: current.points.map((point) => ({ ...point, cluster: -1 })),
-        centroids: nextCentroids,
-        phase: "ready",
-        iteration: 0,
-        moved: 0,
-        maxShift: 0,
-        inertia: 0,
-        events: [...(centroids.length === 0 ? [] : current.events), `Centroid ${nextCentroids.length} placed randomly`],
-      };
+    const centroids = model.centroids.length >= config.k ? [] : model.centroids;
+    const candidates = model.points.filter((point) => (
+      !centroids.some((centroid) => distanceSquared(centroid, point.position) < 0.0001)
+    ));
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!chosen) return;
+    const nextCentroids = [...centroids, [...chosen.position] as Vec3];
+    const complete = nextCentroids.length === config.k;
+    setIsSeeding(!complete);
+    setModel({
+      ...model,
+      points: model.points.map((point) => ({ ...point, cluster: -1 })),
+      centroids: nextCentroids,
+      phase: "ready",
+      iteration: 0,
+      moved: 0,
+      maxShift: 0,
+      inertia: 0,
+      events: [...(centroids.length === 0 ? [] : model.events), complete ? "All random seeds placed · ready to run" : `Centroid ${nextCentroids.length} placed randomly`],
     });
+  };
+
+  const togglePlayback = () => {
+    if (!readyToRun || model.phase === "converged") return;
+    setIsSeeding(false);
+    setIsPlaying((playing) => !playing);
   };
 
   const clusterCounts = useMemo(() => model.centroids.map((_, index) => (
@@ -970,7 +992,7 @@ export default function KMeansLab() {
         <button
           type="button"
           className={`auto-run-button ${isPlaying ? "is-running" : ""}`}
-          onClick={() => setIsPlaying((playing) => !playing)}
+          onClick={togglePlayback}
           disabled={model.phase === "converged" || !readyToRun}
         >
           <i aria-hidden="true">{isPlaying ? "Ⅱ" : "▶"}</i>
@@ -1034,7 +1056,7 @@ export default function KMeansLab() {
         <button
           type="button"
           className="play-button"
-          onClick={() => setIsPlaying((playing) => !playing)}
+          onClick={togglePlayback}
           disabled={model.phase === "converged" || !readyToRun}
           aria-label={isPlaying ? "Pause automatic playback" : "Run automatically"}
         >
