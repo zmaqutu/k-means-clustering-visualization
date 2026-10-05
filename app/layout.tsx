@@ -23,6 +23,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: baseUrl,
+    authors: [{ name: "Zongo Maqutu", url: "https://zongo-is.me/" }],
     title,
     description,
     openGraph: {

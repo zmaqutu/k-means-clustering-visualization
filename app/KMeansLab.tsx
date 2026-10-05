@@ -1,5 +1,7 @@
 "use client";
 
+import ProjectCredit from "./ProjectCredit";
+
 import { Html, OrbitControls } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1348,6 +1350,7 @@ export default function KMeansLab() {
 
   return (
     <main className={`lab-shell ${mobilePanel ? `is-mobile-${mobilePanel}-open` : ""}`}>
+      <ProjectCredit />
       <div className={`scene-layer ${isSeeding ? "is-seeding" : ""}`} aria-label={`Interactive three-dimensional ${ALGORITHMS[config.algorithm].label} visualization`}>
         <Canvas
           camera={{ position: [29, 23, 34], fov: 48, near: 0.1, far: 150 }}
