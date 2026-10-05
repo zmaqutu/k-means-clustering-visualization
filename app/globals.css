@@ -626,31 +626,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .project-credit-author strong { display:block; font-size:13px; font-weight:600; color:#edf5ef; }
 .project-credit-return { flex-shrink:0; font-size:12px; white-space:nowrap; }
 
-/* Keep authorship in the scene's lower-right corner, clear of the controls. */
-.scene-layer > .project-credit {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
-  z-index: 1;
-  width: min(320px, calc(100vw - 48px));
-}
-@media (min-width: 901px) {
-  .insight-rail {
-    bottom: 92px;
-  }
-}
-@media (min-width: 901px) and (max-width: 1120px) {
-  .scene-layer > .project-credit {
-    bottom: 100px;
-  }
-  .insight-rail {
-    bottom: 168px;
-  }
-}
-@media (max-width: 900px) {
-  .scene-layer > .project-credit {
-    right: 12px;
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 134px);
-    width: min(280px, calc(100vw - 24px));
-  }
-}
+.lab-shell > .project-credit { position:absolute; top:24px; left:24px; width:min(350px,calc(100vw - 48px)); z-index:45; }
+.control-panel { top:92px; }
+@media(max-width:1180px) { .lab-shell > .project-credit { top:12px; left:12px; width:min(350px,calc(100vw - 24px)); } .control-panel { top:80px; } .insight-rail { top:80px; } }
+@media(max-width:640px) { .lab-shell > .project-credit { width:calc(100vw - 24px); } }
